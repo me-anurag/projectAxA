@@ -1,0 +1,25 @@
+{
+  "short_name": "AxA",
+  "name": "AxA — Two Minds. One Mission.",
+  "description": "A private workspace for Anurag and Anshuman to manage tasks, challenges, and missions together in real time.",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#0a0f1e",
+  "background_color": "#080808",
+  "orientation": "portrait",
+  "categories": ["productivity", "utilities"]
+}
