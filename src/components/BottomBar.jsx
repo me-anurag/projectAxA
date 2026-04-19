@@ -1,87 +1,92 @@
 import React from 'react';
 import { USERS, VIEWS } from '../lib/theme';
+import { Icon } from './TaskCard';
 import { playClick } from '../lib/sounds';
 
 export default function BottomBar({ currentUser, activeView, onViewChange, unreadCount = 0 }) {
-  const anurag = USERS.anurag;
-  const anshuman = USERS.anshuman;
   const isAnurag = currentUser === 'anurag';
+  const ownUser   = USERS[currentUser];
+  const otherUser = USERS[isAnurag ? 'anshuman' : 'anurag'];
 
-  const leftUser = isAnurag ? anurag : anshuman;    // own
-  const rightUser = isAnurag ? anshuman : anurag;   // other
-
-  const handlePress = (view) => {
-    playClick();
-    onViewChange(view);
-  };
+  const press = (view) => { playClick(); onViewChange(view); };
 
   return (
     <div style={styles.container}>
-      {/* Own workspace button */}
-      <button
-        style={{
-          ...styles.userBtn,
-          background: activeView === VIEWS.OWN
-            ? leftUser.btnGradient
-            : leftUser.surface,
-          borderRight: `1px solid ${leftUser.border}`,
-          color: activeView === VIEWS.OWN ? '#fff' : leftUser.textMuted,
-        }}
-        onClick={() => handlePress(VIEWS.OWN)}
-      >
-        <span style={styles.btnEmoji}>{leftUser.emoji}</span>
-        <span style={{ ...styles.btnLabel, fontFamily: 'Syne, sans-serif' }}>
-          {leftUser.displayName}
-        </span>
-        {activeView === VIEWS.OWN && <div style={{ ...styles.activeDot, background: leftUser.primary }} />}
-      </button>
 
-      {/* Chat button — center, smaller */}
+      {/* Own workspace — slides from left */}
+      <UserBtn
+        theme={ownUser}
+        active={activeView === VIEWS.OWN}
+        side="left"
+        onPress={() => press(VIEWS.OWN)}
+      />
+
+      {/* Chat — center, narrower */}
       <button
         style={{
           ...styles.chatBtn,
           background: activeView === VIEWS.CHAT
-            ? 'linear-gradient(135deg, #1a6fff44, #ff4d1a44)'
-            : 'rgba(255,255,255,0.04)',
-          borderLeft: '1px solid rgba(255,255,255,0.06)',
-          borderRight: '1px solid rgba(255,255,255,0.06)',
-          color: activeView === VIEWS.CHAT ? '#fff' : 'rgba(255,255,255,0.4)',
+            ? 'linear-gradient(135deg,rgba(26,111,255,0.22),rgba(255,77,26,0.22))'
+            : 'rgba(255,255,255,0.03)',
+          borderLeft:  `1px solid rgba(255,255,255,0.06)`,
+          borderRight: `1px solid rgba(255,255,255,0.06)`,
         }}
-        onClick={() => handlePress(VIEWS.CHAT)}
+        onClick={() => press(VIEWS.CHAT)}
       >
-        <ChatIcon active={activeView === VIEWS.CHAT} />
+        <Icon
+          name="chat"
+          size={20}
+          color={activeView === VIEWS.CHAT ? '#fff' : 'rgba(255,255,255,0.35)'}
+          strokeWidth={activeView === VIEWS.CHAT ? 2 : 1.6}
+        />
         {unreadCount > 0 && (
           <div style={styles.badge}>{unreadCount > 9 ? '9+' : unreadCount}</div>
         )}
       </button>
 
-      {/* Other workspace button */}
-      <button
-        style={{
-          ...styles.userBtn,
-          background: activeView === VIEWS.OTHER
-            ? rightUser.btnGradient
-            : rightUser.surface,
-          borderLeft: `1px solid ${rightUser.border}`,
-          color: activeView === VIEWS.OTHER ? '#fff' : rightUser.textMuted,
-        }}
-        onClick={() => handlePress(VIEWS.OTHER)}
-      >
-        <span style={styles.btnEmoji}>{rightUser.emoji}</span>
-        <span style={{ ...styles.btnLabel, fontFamily: 'Syne, sans-serif' }}>
-          {rightUser.displayName}
-        </span>
-        {activeView === VIEWS.OTHER && <div style={{ ...styles.activeDot, background: rightUser.primary }} />}
-      </button>
+      {/* Other workspace — slides from right */}
+      <UserBtn
+        theme={otherUser}
+        active={activeView === VIEWS.OTHER}
+        side="right"
+        onPress={() => press(VIEWS.OTHER)}
+      />
     </div>
   );
 }
 
-function ChatIcon({ active }) {
+function UserBtn({ theme, active, side, onPress }) {
   return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-    </svg>
+    <button
+      style={{
+        ...styles.userBtn,
+        background: active ? theme.btnGradient : theme.surface,
+        borderLeft:  side === 'right' ? `1px solid ${theme.border}` : 'none',
+        borderRight: side === 'left'  ? `1px solid ${theme.border}` : 'none',
+      }}
+      onClick={onPress}
+    >
+      {/* Active indicator dot */}
+      {active && <div style={{ ...styles.activeDot, background: '#fff' }} />}
+
+      {/* Icon: ⚡ for anurag (zap), 🔥 for anshuman (fire) — rendered as SVG */}
+      <div style={{ opacity: active ? 1 : 0.55, transition: 'opacity 0.15s' }}>
+        <Icon
+          name={theme.id === 'anurag' ? 'zap' : 'fire'}
+          size={18}
+          color={active ? '#fff' : theme.primary}
+          strokeWidth={0}
+        />
+      </div>
+
+      <span style={{
+        ...styles.btnLabel,
+        color: active ? '#fff' : theme.textMuted,
+        fontFamily: 'Syne, sans-serif',
+      }}>
+        {theme.displayName}
+      </span>
+    </button>
   );
 }
 
@@ -103,10 +108,10 @@ const styles = {
     border: 'none',
     transition: 'all 0.18s ease',
     position: 'relative',
-    padding: '8px 4px',
+    padding: '6px 4px',
   },
   chatBtn: {
-    width: 68,
+    width: 64,
     flexShrink: 0,
     display: 'flex',
     alignItems: 'center',
@@ -116,22 +121,19 @@ const styles = {
     transition: 'all 0.18s ease',
     position: 'relative',
   },
-  btnEmoji: {
-    fontSize: 18,
-    lineHeight: 1,
-  },
   btnLabel: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: 700,
     letterSpacing: '0.5px',
     textTransform: 'uppercase',
   },
   activeDot: {
     position: 'absolute',
-    top: 6,
-    width: 4,
-    height: 4,
+    top: 7,
+    width: 3,
+    height: 3,
     borderRadius: '50%',
+    opacity: 0.8,
   },
   badge: {
     position: 'absolute',

@@ -2,22 +2,30 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no, maximum-scale=1" />
     <meta name="theme-color" content="#0a0f1e" />
-    <meta name="mobile-web-app-capable" content="yes">
+
+    <!-- iOS PWA: must-have for true standalone install (not browser shortcut) -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="AxA" />
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- Icons -->
+    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/icons/icon-192.jpg" />
+    <link rel="apple-touch-icon" sizes="192x192" href="%PUBLIC_URL%/icons/icon-192.jpg" />
+    <link rel="apple-touch-icon" sizes="512x512" href="%PUBLIC_URL%/icons/icon-512.jpg" />
+    <link rel="icon" type="image/jpeg" href="%PUBLIC_URL%/icons/icon-192.jpg" />
+
     <meta name="description" content="AxA — Two minds. One mission." />
-    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
-    <link rel="apple-touch-icon" href="%PUBLIC_URL%/icons/icon-192.png" />
     <title>AxA</title>
     <style>
-      html, body { 
-        height: 100%; 
-        overflow: hidden; 
-        background: #080808; 
-        margin: 0; 
+      html, body {
+        height: 100%;
+        overflow: hidden;
+        background: #080808;
+        margin: 0;
         padding: 0;
       }
       #root { height: 100%; }

@@ -1,4 +1,7 @@
-// Service Worker Registration for PWA
+// PWA Service Worker Registration — Auto-update on deploy
+// When a new version is deployed to Vercel, this silently updates the app
+// in the background and reloads once the user is idle (tab switch / refocus).
+
 const isLocalhost = Boolean(
   window.location.hostname === 'localhost' ||
   window.location.hostname === '[::1]' ||
@@ -6,18 +9,12 @@ const isLocalhost = Boolean(
 );
 
 export function register(config) {
-  if (process.env.NODE_ENV === 'production' && 'serviceWorker' in navigator) {
-    const publicUrl = new URL(process.env.PUBLIC_URL, window.location.href);
-    if (publicUrl.origin !== window.location.origin) return;
-
+  if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       const swUrl = `${process.env.PUBLIC_URL}/service-worker.js`;
 
       if (isLocalhost) {
         checkValidServiceWorker(swUrl, config);
-        navigator.serviceWorker.ready.then(() => {
-          console.log('[PWA] App is being served cache-first by a service worker.');
-        });
       } else {
         registerValidSW(swUrl, config);
       }
@@ -26,42 +23,76 @@ export function register(config) {
 }
 
 function registerValidSW(swUrl, config) {
-  navigator.serviceWorker.register(swUrl).then(registration => {
-    registration.onupdatefound = () => {
-      const installingWorker = registration.installing;
-      if (installingWorker == null) return;
-      installingWorker.onstatechange = () => {
-        if (installingWorker.state === 'installed') {
-          if (navigator.serviceWorker.controller) {
-            if (config && config.onUpdate) config.onUpdate(registration);
-          } else {
-            if (config && config.onSuccess) config.onSuccess(registration);
+  navigator.serviceWorker
+    .register(swUrl)
+    .then(registration => {
+      // ── Auto-update logic ──────────────────────────────────────────────
+      // Check for updates every 60 seconds while app is open
+      setInterval(() => {
+        registration.update();
+      }, 60 * 1000);
+
+      registration.onupdatefound = () => {
+        const installingWorker = registration.installing;
+        if (!installingWorker) return;
+
+        installingWorker.onstatechange = () => {
+          if (installingWorker.state === 'installed') {
+            if (navigator.serviceWorker.controller) {
+              // New version available — tell SW to skip waiting immediately
+              installingWorker.postMessage({ type: 'SKIP_WAITING' });
+
+              if (config && config.onUpdate) {
+                config.onUpdate(registration);
+              }
+            } else {
+              // First install
+              if (config && config.onSuccess) {
+                config.onSuccess(registration);
+              }
+            }
           }
-        }
+        };
       };
-    };
-  }).catch(error => {
-    console.error('Error during service worker registration:', error);
+    })
+    .catch(error => {
+      console.error('SW registration error:', error);
+    });
+
+  // ── When SW has skipped waiting and taken control, reload the page ──
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshing) return;
+    refreshing = true;
+    window.location.reload();
   });
 }
 
 function checkValidServiceWorker(swUrl, config) {
-  fetch(swUrl, { headers: { 'Service-Worker': 'script' } }).then(response => {
-    const contentType = response.headers.get('content-type');
-    if (response.status === 404 || (contentType != null && contentType.indexOf('javascript') === -1)) {
-      navigator.serviceWorker.ready.then(registration => {
-        registration.unregister().then(() => window.location.reload());
-      });
-    } else {
-      registerValidSW(swUrl, config);
-    }
-  }).catch(() => {
-    console.log('[PWA] No internet connection. App is running in offline mode.');
-  });
+  fetch(swUrl, { headers: { 'Service-Worker': 'script' } })
+    .then(response => {
+      const contentType = response.headers.get('content-type');
+      if (
+        response.status === 404 ||
+        (contentType != null && contentType.indexOf('javascript') === -1)
+      ) {
+        navigator.serviceWorker.ready.then(registration => {
+          registration.unregister().then(() => window.location.reload());
+        });
+      } else {
+        registerValidSW(swUrl, config);
+      }
+    })
+    .catch(() => {
+      console.log('[PWA] Offline — running cached version.');
+    });
 }
 
 export function unregister() {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.ready.then(registration => registration.unregister());
+    navigator.serviceWorker.ready
+      .then(registration => registration.unregister())
+      .catch(err => console.error(err));
   }
 }
+
