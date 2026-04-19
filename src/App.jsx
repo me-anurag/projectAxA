@@ -1,34 +1,51 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { USERS, VIEWS } from './lib/theme';
-import { useChallenges } from './hooks/useData';
-import { playChallengeReceived, playClick } from './lib/sounds';
+import { useChallenges, usePushNotifications } from './hooks/useData';
+import { playStartup, playClick, isSoundEnabled, setSoundEnabled, preloadSounds } from './lib/sounds';
 import Onboarding from './pages/Onboarding';
 import Navbar from './components/Navbar';
 import BottomBar from './components/BottomBar';
 import SidePanel from './components/SidePanel';
 import Workspace from './components/Workspace';
 import ChatScreen from './components/ChatScreen';
+import DailyQuote from './features/daily-quotes/DailyQuote';
 import './styles/global.css';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => localStorage.getItem('axa_user'));
-  const [activeView, setActiveView] = useState(VIEWS.OWN);
+  const [activeView,  setActiveView]  = useState(VIEWS.OWN);
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
-  const [prevChallengeCount, setPrevChallengeCount] = useState(0);
+  const [soundOn,  setSoundOn]  = useState(() => isSoundEnabled());
+  const [quotesOn, setQuotesOn] = useState(() => localStorage.getItem('axa_quotes') !== 'false');
+  const startupPlayed = useRef(false);
 
   const otherUser = currentUser === 'anurag' ? 'anshuman' : 'anurag';
-  const theme = currentUser ? USERS[currentUser] : null;
-
   const { challenges, sendChallenge, updateChallengeStatus } = useChallenges(currentUser || 'anurag');
 
-  // Notify when new challenge arrives
+  // Push notifications
+  usePushNotifications(currentUser);
+
+  // Startup sound — plays once per session after user is identified
   useEffect(() => {
-    const incomingPending = challenges.filter(c => c.to_user === currentUser && c.status === 'pending');
-    if (incomingPending.length > prevChallengeCount && prevChallengeCount > 0) {
-      playChallengeReceived();
+    if (currentUser && !startupPlayed.current) {
+      startupPlayed.current = true;
+      preloadSounds();
+      // Short delay so browser allows autoplay after user interaction on onboarding
+      setTimeout(() => playStartup(), 400);
     }
-    setPrevChallengeCount(incomingPending.length);
-  }, [challenges, currentUser, prevChallengeCount]);
+  }, [currentUser]);
+
+  // Sync sound setting to localStorage
+  const toggleSound = useCallback((val) => {
+    setSoundOn(val);
+    setSoundEnabled(val);
+  }, []);
+
+  // Sync quotes setting to localStorage
+  const toggleQuotes = useCallback((val) => {
+    setQuotesOn(val);
+    localStorage.setItem('axa_quotes', String(val));
+  }, []);
 
   const handleMenuItem = useCallback((id) => {
     if (id === 'logout') {
@@ -47,11 +64,10 @@ export default function App() {
   }
 
   const userTheme = USERS[currentUser];
-  const ownerOfOtherView = otherUser;
 
   return (
     <div style={{ ...styles.root, background: userTheme.bg }}>
-      {/* CSS variables for current user theme */}
+      {/* Per-user CSS variables */}
       <style>{`
         :root {
           --user-primary: ${userTheme.primary};
@@ -67,53 +83,49 @@ export default function App() {
         ::-webkit-scrollbar-thumb { background: ${userTheme.borderHigh}; }
       `}</style>
 
-      {/* Navbar */}
-      <Navbar
-        user={currentUser}
-        onHamburger={() => setSidePanelOpen(true)}
-        activeView={activeView}
-      />
+      {/* Daily Quote overlay (6am, if enabled) */}
+      {quotesOn && <DailyQuote user={currentUser} />}
 
-      {/* View Container — slides between own/other/chat */}
+      {/* Navbar */}
+      <Navbar user={currentUser} onHamburger={() => setSidePanelOpen(true)} />
+
+      {/* View container */}
       <div style={styles.viewContainer}>
         {/* OWN workspace */}
         <div style={{
           ...styles.viewPane,
-          transform: activeView === VIEWS.OWN ? 'translateX(0)' : activeView === VIEWS.CHAT ? 'translateX(-100%)' : 'translateX(-100%)',
-          transition: 'transform 0.32s cubic-bezier(0.4, 0, 0.2, 1)',
+          transform: activeView === VIEWS.OWN ? 'translateX(0)' : 'translateX(-100%)',
+          transition: 'transform 0.32s cubic-bezier(0.4,0,0.2,1)',
           zIndex: activeView === VIEWS.OWN ? 2 : 1,
         }}>
           <Workspace
             ownerUser={currentUser}
             viewerUser={currentUser}
             challenges={challenges}
-            onSendChallenge={(data) => sendChallenge(data)}
-            onChallengeAction={(id, status) => updateChallengeStatus(id, status)}
+            onSendChallenge={sendChallenge}
+            onChallengeAction={updateChallengeStatus}
           />
         </div>
 
-        {/* OTHER user workspace — slides from right */}
+        {/* OTHER workspace */}
         <div style={{
           ...styles.viewPane,
           transform: activeView === VIEWS.OTHER ? 'translateX(0)' : 'translateX(100%)',
-          transition: 'transform 0.32s cubic-bezier(0.4, 0, 0.2, 1)',
+          transition: 'transform 0.32s cubic-bezier(0.4,0,0.2,1)',
           zIndex: activeView === VIEWS.OTHER ? 2 : 1,
         }}>
           <Workspace
-            ownerUser={ownerOfOtherView}
+            ownerUser={otherUser}
             viewerUser={currentUser}
             challenges={challenges}
-            onSendChallenge={(data) => sendChallenge(data)}
-            onChallengeAction={(id, status) => updateChallengeStatus(id, status)}
+            onSendChallenge={sendChallenge}
+            onChallengeAction={updateChallengeStatus}
           />
         </div>
 
-        {/* CHAT — slides up from bottom */}
+        {/* CHAT */}
         {activeView === VIEWS.CHAT && (
-          <ChatScreen
-            currentUser={currentUser}
-            onClose={() => setActiveView(VIEWS.OWN)}
-          />
+          <ChatScreen currentUser={currentUser} onClose={() => setActiveView(VIEWS.OWN)} />
         )}
       </div>
 
@@ -131,6 +143,10 @@ export default function App() {
         onClose={() => setSidePanelOpen(false)}
         user={currentUser}
         onMenuItem={handleMenuItem}
+        soundOn={soundOn}
+        onToggleSound={toggleSound}
+        quotesOn={quotesOn}
+        onToggleQuotes={toggleQuotes}
       />
     </div>
   );

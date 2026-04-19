@@ -28,7 +28,13 @@ export function Icon({ name, size = 16, color = 'currentColor', strokeWidth = 1.
     trophy:       <><path d="M6 9H4a2 2 0 0 0-2 2v1a5 5 0 0 0 5 5" fill="none"/><path d="M18 9h2a2 2 0 0 1 2 2v1a5 5 0 0 1-5 5" fill="none"/><path d="M6 2h12v7a6 6 0 0 1-12 0V2z" fill="none"/><line x1="12" y1="17" x2="12" y2="21"/><line x1="8" y1="21" x2="16" y2="21"/></>,
     history:      <><polyline points="1,4 1,10 7,10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5" fill="none"/></>,
     zap:          <polygon points="13,2 3,14 12,14 11,22 21,10 12,10" fill={color} stroke="none"/>,
+    fire:         <path d="M12 2c0 0-5 5-5 10a5 5 0 0 0 10 0C17 7 12 2 12 2zM9.5 14.5c-.5-1.5.5-3 .5-3s1 2 2.5 2.5c0-1 .5-2.5.5-2.5s2 2 1 4a3 3 0 0 1-4.5-1z" fill={color} stroke="none"/>,
     image:        <><rect x="3" y="3" width="18" height="18" rx="2" ry="2" fill="none"/><circle cx="8.5" cy="8.5" r="1.5" fill={color} stroke="none"/><polyline points="21,15 16,10 5,21"/></>,
+    volume:       <><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill={color} stroke="none"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07" fill="none"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14" fill="none"/></>,
+    volumeOff:    <><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill={color} stroke="none"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></>,
+    quote:        <><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z" fill="none"/><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3c0 1 0 1 1 1z" fill="none"/></>,
+    camera:       <><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" fill="none"/><circle cx="12" cy="13" r="4" fill="none"/></>,
+    sparkles:     <><path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z" fill={color} stroke="none"/><path d="M5 17l.75 2.25L8 20l-2.25.75L5 23l-.75-2.25L2 20l2.25-.75L5 17z" fill={color} stroke="none"/></>,
   };
 
   return (
