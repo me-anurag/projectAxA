@@ -5,9 +5,14 @@ import { celebrate } from '../lib/celebrate';
 import { playSuccess, playMissed, playCheckbox, playNotification } from '../lib/sounds';
 
 // ─── TASKS HOOK ──────────────────────────────────────────────────────────────
+// Uses optimistic updates for every mutation so the UI reflects changes
+// instantly without waiting for a round-trip or realtime event.
 export function useTasks(owner) {
-  const [tasks, setTasks]   = useState([]);
+  const [tasks, setTasks]     = useState([]);
   const [loading, setLoading] = useState(true);
+  // Stable ref so realtime callback always has the latest fetch function
+  // without the channel needing to resubscribe when fetchTasks identity changes
+  const fetchRef = useRef(null);
 
   const fetchTasks = useCallback(async () => {
     const { data } = await supabase
@@ -19,23 +24,36 @@ export function useTasks(owner) {
     setLoading(false);
   }, [owner]);
 
+  // Keep ref in sync
+  fetchRef.current = fetchTasks;
+
   useEffect(() => {
     fetchTasks();
-    const ch = supabase
-      .channel(`tasks:${owner}:v2`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `owner=eq.${owner}` }, fetchTasks)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'subtasks' }, fetchTasks)
-      .subscribe();
-    return () => supabase.removeChannel(ch);
-  }, [owner, fetchTasks]);
 
-  // Auto-mark missed
+    // Channel uses a stable wrapper via ref — never needs to resubscribe
+    const ch = supabase
+      .channel(`tasks_rt_${owner}`)
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'tasks', filter: `owner=eq.${owner}` },
+        () => fetchRef.current?.())
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'subtasks' },
+        () => fetchRef.current?.())
+      .subscribe();
+
+    return () => { supabase.removeChannel(ch); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [owner]); // intentionally only owner — channel must NOT resubscribe on fetchTasks identity change
+
+  // Auto-mark missed tasks (runs once per minute)
   useEffect(() => {
     const interval = setInterval(() => {
       const now = new Date();
       tasks.forEach(async task => {
         if (task.status === TASK_STATUS.ACTIVE && task.deadline && new Date(task.deadline) < now) {
           await supabase.from('tasks').update({ status: TASK_STATUS.MISSED }).eq('id', task.id);
+          // Optimistic
+          setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: TASK_STATUS.MISSED } : t));
           playMissed();
         }
       });
@@ -43,30 +61,93 @@ export function useTasks(owner) {
     return () => clearInterval(interval);
   }, [tasks]);
 
+  // ── createTask — optimistic insert ───────────────────────────────────────
   const createTask = useCallback(async ({ title, description, deadline, subtaskLabels, imageFiles }) => {
+    // 1. Upload images first (can't fake this, needs real URL)
     let imageUrls = [];
     if (imageFiles?.length) {
       imageUrls = await Promise.all(imageFiles.map(f => uploadImage(f)));
     }
+
+    // 2. Build optimistic task object
+    const tempId = `temp_${Date.now()}`;
+    const optimistic = {
+      id: tempId,
+      owner,
+      title,
+      description: description || null,
+      deadline: deadline || null,
+      status: TASK_STATUS.ACTIVE,
+      image_urls: imageUrls,
+      created_at: new Date().toISOString(),
+      subtasks: (subtaskLabels || []).map((label, i) => ({
+        id: `temp_st_${i}`,
+        task_id: tempId,
+        label,
+        done: false,
+        position: i,
+      })),
+    };
+
+    // 3. Show immediately in UI
+    setTasks(prev => [optimistic, ...prev]);
+
+    // 4. Persist to DB
     const { data: task, error } = await supabase
       .from('tasks')
       .insert({ owner, title, description, deadline, image_urls: imageUrls })
       .select()
       .single();
-    if (error) throw error;
-    if (subtaskLabels?.length) {
-      await supabase.from('subtasks').insert(
-        subtaskLabels.map((label, i) => ({ task_id: task.id, label, done: false, position: i }))
-      );
+
+    if (error) {
+      // Roll back optimistic update
+      setTasks(prev => prev.filter(t => t.id !== tempId));
+      throw error;
     }
+
+    if (subtaskLabels?.length) {
+      const { data: insertedSubtasks } = await supabase
+        .from('subtasks')
+        .insert(subtaskLabels.map((label, i) => ({ task_id: task.id, label, done: false, position: i })))
+        .select();
+
+      // Replace optimistic task with real task + real subtasks
+      setTasks(prev => prev.map(t =>
+        t.id === tempId
+          ? { ...task, subtasks: insertedSubtasks || [] }
+          : t
+      ));
+    } else {
+      // Replace temp with real task
+      setTasks(prev => prev.map(t => t.id === tempId ? { ...task, subtasks: [] } : t));
+    }
+
     return task;
   }, [owner]);
 
+  // ── toggleSubtask — optimistic ───────────────────────────────────────────
   const toggleSubtask = useCallback(async (subtaskId, done, task, userTheme) => {
-    await supabase.from('subtasks').update({ done }).eq('id', subtaskId);
+    // Immediately update the subtask in local state
+    setTasks(prev => prev.map(t => {
+      if (t.id !== task.id) return t;
+      const updatedSubtasks = t.subtasks.map(s => s.id === subtaskId ? { ...s, done } : s);
+      const allDone = updatedSubtasks.length > 0 && updatedSubtasks.every(s => s.done);
+      return {
+        ...t,
+        subtasks: updatedSubtasks,
+        status: allDone ? TASK_STATUS.COMPLETED : t.status,
+      };
+    }));
     playCheckbox();
-    const { data: updatedSubtasks } = await supabase.from('subtasks').select('*').eq('task_id', task.id);
+
+    // Persist subtask change
+    await supabase.from('subtasks').update({ done }).eq('id', subtaskId);
+
+    // Check if all done and update task status
+    const { data: updatedSubtasks } = await supabase
+      .from('subtasks').select('*').eq('task_id', task.id);
     const allDone = updatedSubtasks?.length > 0 && updatedSubtasks.every(s => s.done);
+
     if (allDone) {
       await supabase.from('tasks').update({ status: TASK_STATUS.COMPLETED }).eq('id', task.id);
       celebrate(userTheme);
@@ -74,75 +155,106 @@ export function useTasks(owner) {
     }
   }, []);
 
+  // ── toggleTaskComplete — optimistic ──────────────────────────────────────
   const toggleTaskComplete = useCallback(async (task, userTheme) => {
     if (task.status === TASK_STATUS.MISSED) return;
-    const newStatus = task.status === TASK_STATUS.COMPLETED ? TASK_STATUS.ACTIVE : TASK_STATUS.COMPLETED;
-    await supabase.from('tasks').update({ status: newStatus }).eq('id', task.id);
+    const newStatus = task.status === TASK_STATUS.COMPLETED
+      ? TASK_STATUS.ACTIVE
+      : TASK_STATUS.COMPLETED;
+
+    // Optimistic update immediately
+    setTasks(prev => prev.map(t =>
+      t.id === task.id ? { ...t, status: newStatus } : t
+    ));
+
     if (newStatus === TASK_STATUS.COMPLETED) {
       celebrate(userTheme);
       playSuccess();
     }
+
+    // Persist
+    await supabase.from('tasks').update({ status: newStatus }).eq('id', task.id);
   }, []);
 
-  // ── FIXED deleteTask ──────────────────────────────────────────────────────
-  // Manually cascade-delete child rows before deleting the task.
-  // This handles cases where RLS policies block the ON DELETE CASCADE.
+  // ── deleteTask — optimistic ───────────────────────────────────────────────
   const deleteTask = useCallback(async (taskId) => {
-    // Step 1: optimistically remove from local state so UI feels instant
+    // Remove from UI instantly
     setTasks(prev => prev.filter(t => t.id !== taskId));
-    // Step 2: delete children first to avoid FK/RLS constraint errors
+
+    // Delete children first to avoid FK constraint issues with RLS
     await supabase.from('comments').delete().eq('task_id', taskId);
     await supabase.from('reactions').delete().eq('task_id', taskId);
     await supabase.from('subtasks').delete().eq('task_id', taskId);
-    // Step 3: delete the task itself
+
     const { error } = await supabase.from('tasks').delete().eq('id', taskId);
     if (error) {
       console.error('[AxA] deleteTask error:', error.message);
-      // Re-fetch to restore state if something went wrong
-      fetchTasks();
+      fetchRef.current?.(); // restore on failure
       throw error;
     }
-  }, [fetchTasks]);
+  }, []);
 
-  return { tasks, loading, createTask, toggleSubtask, toggleTaskComplete, deleteTask, refetch: fetchTasks };
+  return { tasks, loading, createTask, toggleSubtask, toggleTaskComplete, deleteTask };
 }
 
-// ─── REACTIONS & COMMENTS HOOK ────────────────────────────────────────────────
+// ─── REACTIONS & COMMENTS — optimistic ───────────────────────────────────────
 export function useTaskSocial(taskId) {
   const [reactions, setReactions] = useState([]);
   const [comments,  setComments]  = useState([]);
+  const fetchRef = useRef(null);
+
+  const fetchAll = useCallback(async () => {
+    if (!taskId) return;
+    const [{ data: r }, { data: c }] = await Promise.all([
+      supabase.from('reactions').select('*').eq('task_id', taskId),
+      supabase.from('comments').select('*').eq('task_id', taskId).order('created_at'),
+    ]);
+    setReactions(r || []);
+    setComments(c || []);
+  }, [taskId]);
+
+  fetchRef.current = fetchAll;
 
   useEffect(() => {
     if (!taskId) return;
-    const fetchAll = async () => {
-      const [{ data: r }, { data: c }] = await Promise.all([
-        supabase.from('reactions').select('*').eq('task_id', taskId),
-        supabase.from('comments').select('*').eq('task_id', taskId).order('created_at'),
-      ]);
-      setReactions(r || []);
-      setComments(c || []);
-    };
     fetchAll();
     const sub = supabase
-      .channel(`social:${taskId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions', filter: `task_id=eq.${taskId}` }, fetchAll)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments',  filter: `task_id=eq.${taskId}` }, fetchAll)
+      .channel(`social_rt_${taskId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions', filter: `task_id=eq.${taskId}` }, () => fetchRef.current?.())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments',  filter: `task_id=eq.${taskId}` }, () => fetchRef.current?.())
       .subscribe();
     return () => supabase.removeChannel(sub);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId]);
 
   const toggleReaction = useCallback(async (reactor, emoji) => {
     const existing = reactions.find(r => r.reactor === reactor && r.emoji === emoji);
     if (existing) {
+      // Optimistic remove
+      setReactions(prev => prev.filter(r => r.id !== existing.id));
       await supabase.from('reactions').delete().eq('id', existing.id);
     } else {
-      await supabase.from('reactions').insert({ task_id: taskId, reactor, emoji });
+      // Optimistic add
+      const tempReaction = { id: `temp_r_${Date.now()}`, task_id: taskId, reactor, emoji };
+      setReactions(prev => [...prev, tempReaction]);
+      const { data } = await supabase.from('reactions').insert({ task_id: taskId, reactor, emoji }).select().single();
+      if (data) setReactions(prev => prev.map(r => r.id === tempReaction.id ? data : r));
     }
   }, [taskId, reactions]);
 
   const addComment = useCallback(async (author, body) => {
     if (!body.trim()) return;
-    await supabase.from('comments').insert({ task_id: taskId, author, body: body.trim() });
+    // Optimistic add
+    const tempComment = {
+      id: `temp_c_${Date.now()}`,
+      task_id: taskId,
+      author,
+      body: body.trim(),
+      created_at: new Date().toISOString(),
+    };
+    setComments(prev => [...prev, tempComment]);
+    const { data } = await supabase.from('comments').insert({ task_id: taskId, author, body: body.trim() }).select().single();
+    if (data) setComments(prev => prev.map(c => c.id === tempComment.id ? data : c));
   }, [taskId]);
 
   return { reactions, comments, toggleReaction, addComment };
@@ -151,133 +263,217 @@ export function useTaskSocial(taskId) {
 // ─── CHALLENGES HOOK ──────────────────────────────────────────────────────────
 export function useChallenges(userId) {
   const [challenges, setChallenges] = useState([]);
+  const fetchRef = useRef(null);
+
+  const fetchChallenges = useCallback(async () => {
+    const { data } = await supabase
+      .from('challenges')
+      .select('*')
+      .or(`from_user.eq.${userId},to_user.eq.${userId}`)
+      .order('created_at', { ascending: false });
+    setChallenges(data || []);
+  }, [userId]);
+
+  fetchRef.current = fetchChallenges;
 
   useEffect(() => {
-    const fetch = async () => {
-      const { data } = await supabase
-        .from('challenges')
-        .select('*')
-        .or(`from_user.eq.${userId},to_user.eq.${userId}`)
-        .order('created_at', { ascending: false });
-      setChallenges(data || []);
-    };
-    fetch();
+    fetchChallenges();
     const sub = supabase
-      .channel(`challenges:${userId}:v2`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'challenges' }, fetch)
+      .channel(`challenges_rt_${userId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'challenges' },
+        () => fetchRef.current?.())
       .subscribe();
     return () => supabase.removeChannel(sub);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
   const sendChallenge = useCallback(async ({ from, to, title, description, deadline }) => {
-    await supabase.from('challenges').insert({ from_user: from, to_user: to, title, description, deadline });
+    // Optimistic
+    const temp = {
+      id: `temp_ch_${Date.now()}`,
+      from_user: from, to_user: to, title, description,
+      deadline: deadline || null,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    };
+    setChallenges(prev => [temp, ...prev]);
+
+    const { data, error } = await supabase
+      .from('challenges')
+      .insert({ from_user: from, to_user: to, title, description, deadline })
+      .select().single();
+
+    if (error) {
+      setChallenges(prev => prev.filter(c => c.id !== temp.id));
+      throw error;
+    }
+    setChallenges(prev => prev.map(c => c.id === temp.id ? data : c));
   }, []);
 
   const updateChallengeStatus = useCallback(async (id, status) => {
+    // Optimistic
+    setChallenges(prev => prev.map(c => c.id === id ? { ...c, status } : c));
     await supabase.from('challenges').update({ status }).eq('id', id);
   }, []);
 
   return { challenges, sendChallenge, updateChallengeStatus };
 }
 
-// ─── MESSAGES HOOK ────────────────────────────────────────────────────────────
+// ─── MESSAGES HOOK — fully optimistic ────────────────────────────────────────
 export function useMessages() {
   const [messages, setMessages] = useState([]);
+  const fetchRef = useRef(null);
+
+  const fetchMessages = useCallback(async () => {
+    const { data } = await supabase
+      .from('messages')
+      .select('*')
+      .order('created_at', { ascending: true })
+      .limit(200);
+    setMessages(data || []);
+  }, []);
+
+  fetchRef.current = fetchMessages;
 
   useEffect(() => {
-    const fetch = async () => {
-      const { data } = await supabase
-        .from('messages')
-        .select('*')
-        .order('created_at', { ascending: true })
-        .limit(200);
-      setMessages(data || []);
-    };
-    fetch();
+    fetchMessages();
     const sub = supabase
-      .channel('messages:all:v2')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' },
-        payload => setMessages(prev => [...prev, payload.new]))
+      .channel('messages_rt_all')
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        payload => {
+          // Add incoming message from the other user directly to state
+          setMessages(prev => {
+            // avoid duplicates (temp message already in list)
+            const exists = prev.some(m => m.id === payload.new.id);
+            if (exists) return prev;
+            return [...prev, payload.new];
+          });
+        })
       .subscribe();
     return () => supabase.removeChannel(sub);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const sendMessage = useCallback(async (sender, body, imageFile) => {
+    // 1. Upload image if present
     let image_url = null;
     if (imageFile) image_url = await uploadImage(imageFile, 'chat');
-    await supabase.from('messages').insert({ sender, body: body?.trim() || null, image_url });
+
+    // 2. Optimistic — show message immediately as "sending"
+    const tempId = `temp_msg_${Date.now()}`;
+    const tempMsg = {
+      id: tempId,
+      sender,
+      body: body?.trim() || null,
+      image_url,
+      created_at: new Date().toISOString(),
+      _sending: true, // flag for UI
+    };
+    setMessages(prev => [...prev, tempMsg]);
+
+    // 3. Persist
+    const { data, error } = await supabase
+      .from('messages')
+      .insert({ sender, body: body?.trim() || null, image_url })
+      .select()
+      .single();
+
+    if (error) {
+      // Roll back
+      setMessages(prev => prev.filter(m => m.id !== tempId));
+      throw error;
+    }
+
+    // 4. Replace temp with real message
+    setMessages(prev => prev.map(m => m.id === tempId ? { ...data, _sending: false } : m));
   }, []);
 
   return { messages, sendMessage };
 }
 
-// ─── PUSH NOTIFICATIONS HOOK ──────────────────────────────────────────────────
-// Listens for new messages and challenges sent TO the current user,
-// fires a browser push notification (requires user permission).
+// ─── PUSH NOTIFICATIONS ───────────────────────────────────────────────────────
+// True OS-level push via service worker. Requires Notification permission.
+// Works when app is open, minimised, or phone is locked (if SW is registered).
 export function usePushNotifications(currentUser) {
   const lastMsgId    = useRef(null);
   const lastChallIds = useRef(new Set());
 
-  // Request permission once
+  // Request permission on first mount — do this after a user gesture ideally,
+  // but requesting on mount still works in most browsers
   useEffect(() => {
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
   }, []);
 
-  const sendPush = useCallback((title, body, icon = '/icons/icon-192.jpg') => {
-    if (!('Notification' in window)) return;
+  // Fire an OS notification via the service worker (works in background)
+  const sendPush = useCallback((title, body) => {
     if (Notification.permission !== 'granted') return;
     playNotification();
-    try {
-      // Use service worker notification if available (works when app is in background)
-      if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-        navigator.serviceWorker.ready.then(reg => {
-          reg.showNotification(title, { body, icon, badge: icon, vibrate: [200, 100, 200] });
+
+    const icon = '/icons/icon-192.jpg';
+    const badge = '/icons/icon-192.jpg';
+
+    // Service worker path — fires even when app tab is not focused
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready
+        .then(reg => {
+          reg.showNotification(title, {
+            body,
+            icon,
+            badge,
+            vibrate: [150, 80, 150],
+            tag: 'axa-notification', // replaces previous notification of same type
+            renotify: true,
+            data: { url: window.location.href },
+          });
+        })
+        .catch(() => {
+          // Fallback if SW not ready
+          try { new Notification(title, { body, icon }); } catch (_) {}
         });
-      } else {
-        new Notification(title, { body, icon });
-      }
-    } catch (e) { /* silent */ }
+    } else {
+      try { new Notification(title, { body, icon }); } catch (_) {}
+    }
   }, []);
 
-  // Watch new messages
+  // Watch new messages from the other user
   useEffect(() => {
     if (!currentUser) return;
-    const otherUser = currentUser === 'anurag' ? 'anshuman' : 'anurag';
-
     const sub = supabase
-      .channel(`push:messages:${currentUser}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
-        const msg = payload.new;
-        // Only notify if it's from the other user
-        if (msg.sender !== currentUser && msg.id !== lastMsgId.current) {
-          lastMsgId.current = msg.id;
-          const senderName = msg.sender === 'anurag' ? 'Anurag⚡' : 'Anshuman🔥';
-          const preview = msg.body ? msg.body.slice(0, 60) : '📎 Image';
-          sendPush(`${senderName} — New Message`, preview);
-        }
-      })
+      .channel(`push_msg_${currentUser}`)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        payload => {
+          const msg = payload.new;
+          if (msg.sender !== currentUser && msg.id !== lastMsgId.current) {
+            lastMsgId.current = msg.id;
+            const from = msg.sender === 'anurag' ? 'Anurag ⚡' : 'Anshuman 🔥';
+            const preview = msg.body ? msg.body.slice(0, 80) : 'Sent an image';
+            sendPush(`${from}`, preview);
+          }
+        })
       .subscribe();
-
     return () => supabase.removeChannel(sub);
   }, [currentUser, sendPush]);
 
-  // Watch new challenges sent TO current user
+  // Watch new challenges sent to this user
   useEffect(() => {
     if (!currentUser) return;
     const sub = supabase
-      .channel(`push:challenges:${currentUser}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'challenges' }, payload => {
-        const c = payload.new;
-        if (c.to_user === currentUser && !lastChallIds.current.has(c.id)) {
-          lastChallIds.current.add(c.id);
-          const fromName = c.from_user === 'anurag' ? 'Anurag⚡' : 'Anshuman🔥';
-          sendPush(`⚔️ New Challenge from ${fromName}`, c.title);
-        }
-      })
+      .channel(`push_chall_${currentUser}`)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'challenges' },
+        payload => {
+          const c = payload.new;
+          if (c.to_user === currentUser && !lastChallIds.current.has(c.id)) {
+            lastChallIds.current.add(c.id);
+            const from = c.from_user === 'anurag' ? 'Anurag ⚡' : 'Anshuman 🔥';
+            sendPush(`⚔️ Challenge from ${from}`, c.title);
+          }
+        })
       .subscribe();
-
     return () => supabase.removeChannel(sub);
   }, [currentUser, sendPush]);
 }
