@@ -9,12 +9,14 @@ import SidePanel from './components/SidePanel';
 import Workspace from './components/Workspace';
 import ChatScreen from './components/ChatScreen';
 import DailyQuote from './features/daily-quotes/DailyQuote';
+import SyllabusScreen from './features/syllabus/SyllabusScreen';
 import './styles/global.css';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => localStorage.getItem('axa_user'));
-  const [activeView,  setActiveView]  = useState(VIEWS.OWN);
+  const [activeView,   setActiveView]  = useState(VIEWS.OWN);
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
+  const [syllabusOpen,  setSyllabusOpen]  = useState(false);
   const [soundOn,  setSoundOn]  = useState(() => isSoundEnabled());
   const [quotesOn, setQuotesOn] = useState(() => localStorage.getItem('axa_quotes') !== 'false');
   const startupPlayed = useRef(false);
@@ -22,26 +24,21 @@ export default function App() {
   const otherUser = currentUser === 'anurag' ? 'anshuman' : 'anurag';
   const { challenges, sendChallenge, updateChallengeStatus } = useChallenges(currentUser || 'anurag');
 
-  // Push notifications
   usePushNotifications(currentUser);
 
-  // Startup sound — plays once per session after user is identified
   useEffect(() => {
     if (currentUser && !startupPlayed.current) {
       startupPlayed.current = true;
       preloadSounds();
-      // Short delay so browser allows autoplay after user interaction on onboarding
       setTimeout(() => playStartup(), 400);
     }
   }, [currentUser]);
 
-  // Sync sound setting to localStorage
   const toggleSound = useCallback((val) => {
     setSoundOn(val);
     setSoundEnabled(val);
   }, []);
 
-  // Sync quotes setting to localStorage
   const toggleQuotes = useCallback((val) => {
     setQuotesOn(val);
     localStorage.setItem('axa_quotes', String(val));
@@ -51,6 +48,9 @@ export default function App() {
     if (id === 'logout') {
       localStorage.removeItem('axa_user');
       setCurrentUser(null);
+    }
+    if (id === 'syllabus') {
+      setSyllabusOpen(true);
     }
   }, []);
 
@@ -67,7 +67,6 @@ export default function App() {
 
   return (
     <div style={{ ...styles.root, background: userTheme.bg }}>
-      {/* Per-user CSS variables */}
       <style>{`
         :root {
           --user-primary: ${userTheme.primary};
@@ -83,13 +82,10 @@ export default function App() {
         ::-webkit-scrollbar-thumb { background: ${userTheme.borderHigh}; }
       `}</style>
 
-      {/* Daily Quote overlay (6am, if enabled) */}
       {quotesOn && <DailyQuote user={currentUser} />}
 
-      {/* Navbar */}
       <Navbar user={currentUser} onHamburger={() => setSidePanelOpen(true)} />
 
-      {/* View container */}
       <div style={styles.viewContainer}>
         {/* OWN workspace */}
         <div style={{
@@ -127,9 +123,13 @@ export default function App() {
         {activeView === VIEWS.CHAT && (
           <ChatScreen currentUser={currentUser} onClose={() => setActiveView(VIEWS.OWN)} />
         )}
+
+        {/* SYLLABUS — slides in over everything */}
+        {syllabusOpen && (
+          <SyllabusScreen user={currentUser} onClose={() => setSyllabusOpen(false)} />
+        )}
       </div>
 
-      {/* Bottom Bar */}
       <BottomBar
         currentUser={currentUser}
         activeView={activeView}
@@ -137,7 +137,6 @@ export default function App() {
         unreadCount={0}
       />
 
-      {/* Side Panel */}
       <SidePanel
         open={sidePanelOpen}
         onClose={() => setSidePanelOpen(false)}
@@ -153,25 +152,7 @@ export default function App() {
 }
 
 const styles = {
-  root: {
-    position: 'fixed',
-    inset: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-  },
-  viewContainer: {
-    flex: 1,
-    position: 'relative',
-    overflow: 'hidden',
-    display: 'flex',
-  },
-  viewPane: {
-    position: 'absolute',
-    inset: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-    willChange: 'transform',
-  },
+  root: { position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+  viewContainer: { flex: 1, position: 'relative', overflow: 'hidden', display: 'flex' },
+  viewPane: { position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', willChange: 'transform' },
 };

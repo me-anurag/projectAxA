@@ -4,18 +4,29 @@ import { format } from 'date-fns';
 import { playClick } from '../lib/sounds';
 import { Icon } from './TaskCard';
 import AISubtaskScanner from '../features/ai-subtasks/AISubtaskScanner';
+import { useSyllabus } from '../features/syllabus/useSyllabus';
 
 export default function CreateTaskModal({ user, onSubmit, onClose }) {
   const theme = USERS[user];
-  const [title,       setTitle]       = useState('');
-  const [description, setDescription] = useState('');
-  const [deadline,    setDeadline]    = useState('');
-  const [subtasks,    setSubtasks]    = useState([]);
-  const [newSubtask,  setNewSubtask]  = useState('');
-  const [images,      setImages]      = useState([]);
-  const [submitting,  setSubmitting]  = useState(false);
-  const [showAI,      setShowAI]      = useState(false);
+  const { headingOptions, recordMission } = useSyllabus(user);
+
+  const [title,          setTitle]         = useState('');
+  const [selectedTopic,  setSelectedTopic] = useState(''); // heading id, or '' for free-text
+  const [showDropdown,   setShowDropdown]  = useState(false);
+  const [description,    setDescription]  = useState('');
+  const [deadline,       setDeadline]      = useState('');
+  const [subtasks,       setSubtasks]      = useState([]);
+  const [newSubtask,     setNewSubtask]    = useState('');
+  const [images,         setImages]        = useState([]);
+  const [submitting,     setSubmitting]    = useState(false);
+  const [showAI,         setShowAI]        = useState(false);
   const fileRef = useRef();
+
+  // The heading label shown for the selected topic
+  const selectedHeading = headingOptions.find(h => h.id === selectedTopic);
+
+  // Title input: if a topic is selected, the title defaults to topic name but can be overridden
+  const effectiveTitle = title.trim();
 
   const addSubtask = () => {
     if (!newSubtask.trim()) return;
@@ -24,30 +35,35 @@ export default function CreateTaskModal({ user, onSubmit, onClose }) {
     setNewSubtask('');
   };
 
-  const editSubtask = (i, val) => {
-    setSubtasks(prev => prev.map((s, idx) => idx === i ? val : s));
-  };
-
-  const removeSubtask = (i) => {
-    setSubtasks(prev => prev.filter((_, idx) => idx !== i));
-  };
+  const editSubtask = (i, val) => setSubtasks(prev => prev.map((s, idx) => idx === i ? val : s));
+  const removeSubtask = (i) => setSubtasks(prev => prev.filter((_, idx) => idx !== i));
 
   const handleImages = (e) => {
-    const files = Array.from(e.target.files).slice(0, 4);
-    setImages(files);
+    setImages(Array.from(e.target.files).slice(0, 4));
   };
 
   const handleSubmit = async () => {
-    if (!title.trim()) return;
+    if (!effectiveTitle) return;
     setSubmitting(true);
     try {
       await onSubmit({
-        title: title.trim(),
+        title: effectiveTitle,
         description: description.trim() || null,
         deadline: deadline ? new Date(deadline).toISOString() : null,
         subtaskLabels: subtasks.filter(s => s.trim()),
         imageFiles: images,
       });
+
+      // Record coverage if a syllabus heading was selected
+      if (selectedTopic) {
+        recordMission(selectedTopic, {
+          taskTitle:   effectiveTitle,
+          description: description.trim() || '',
+          subtasks:    subtasks.filter(s => s.trim()),
+          date:        new Date().toISOString(),
+        });
+      }
+
       onClose();
     } catch (e) {
       console.error(e);
@@ -80,21 +96,79 @@ export default function CreateTaskModal({ user, onSubmit, onClose }) {
         <div style={{ ...styles.header, borderBottom: `1px solid ${theme.border}` }}>
           <div style={{ ...styles.accentBar, background: theme.btnGradient }} />
           <span style={{ ...styles.headerTitle, color: theme.text }}>New Mission</span>
-          <button style={{ ...styles.closeBtn, color: theme.textMuted }} onClick={onClose}>
+          <button style={styles.closeBtn} onClick={onClose}>
             <Icon name="x" size={16} color={theme.textMuted} />
           </button>
         </div>
 
         <div style={styles.body}>
 
-          {/* Title */}
+          {/* ── Syllabus Topic Picker ── */}
+          {headingOptions.length > 0 && (
+            <Field label="SYLLABUS TOPIC" theme={theme}>
+              <div style={{ position: 'relative' }}>
+                <button
+                  style={{
+                    ...styles.topicBtn,
+                    background: selectedTopic ? `${theme.primary}14` : theme.surfaceHigh,
+                    border: `1px solid ${selectedTopic ? theme.primary : theme.border}`,
+                    color: selectedTopic ? theme.primary : theme.textMuted,
+                  }}
+                  onClick={() => { playClick(); setShowDropdown(!showDropdown); }}
+                >
+                  <Icon name="book" size={14} color={selectedTopic ? theme.primary : theme.textMuted} />
+                  <span style={{ flex: 1, textAlign: 'left', fontSize: 13, fontFamily: 'DM Sans, sans-serif' }}>
+                    {selectedHeading ? selectedHeading.title : 'Select topic (optional)'}
+                  </span>
+                  <Icon name={showDropdown ? 'chevronUp' : 'chevronDown'} size={14} color={selectedTopic ? theme.primary : theme.textMuted} />
+                </button>
+
+                {showDropdown && (
+                  <div style={{ ...styles.dropdown, background: theme.surface, border: `1px solid ${theme.borderHigh}`, boxShadow: `0 8px 24px rgba(0,0,0,0.4)` }}>
+                    {/* Clear option */}
+                    <button
+                      style={{ ...styles.dropdownItem, color: theme.textMuted }}
+                      onClick={() => { setSelectedTopic(''); setShowDropdown(false); }}
+                    >
+                      <Icon name="x" size={12} color={theme.textMuted} />
+                      No topic / free-form
+                    </button>
+                    <div style={{ height: 1, background: theme.border, margin: '2px 0' }} />
+                    {headingOptions.map(h => (
+                      <button
+                        key={h.id}
+                        style={{
+                          ...styles.dropdownItem,
+                          color: selectedTopic === h.id ? theme.primary : theme.text,
+                          background: selectedTopic === h.id ? `${theme.primary}14` : 'transparent',
+                        }}
+                        onClick={() => {
+                          setSelectedTopic(h.id);
+                          setShowDropdown(false);
+                          playClick();
+                          // Pre-fill title with heading name if title is empty
+                          if (!title.trim()) setTitle(h.title);
+                        }}
+                      >
+                        <Icon name="book" size={12} color={selectedTopic === h.id ? theme.primary : theme.textMuted} />
+                        {h.title}
+                        {selectedTopic === h.id && <Icon name="check" size={12} color={theme.primary} strokeWidth={2.5} />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </Field>
+          )}
+
+          {/* ── Mission Title ── */}
           <Field label="MISSION TITLE *" theme={theme}>
             <input
               style={inp}
               placeholder="What must be done?"
               value={title}
               onChange={e => setTitle(e.target.value)}
-              autoFocus
+              autoFocus={headingOptions.length === 0}
             />
           </Field>
 
@@ -133,7 +207,6 @@ export default function CreateTaskModal({ user, onSubmit, onClose }) {
               </button>
             }
           >
-            {/* AI Scanner (Coming Soon) */}
             {showAI && (
               <AISubtaskScanner
                 theme={theme}
@@ -144,7 +217,6 @@ export default function CreateTaskModal({ user, onSubmit, onClose }) {
               />
             )}
 
-            {/* Subtask list — editable */}
             {subtasks.map((s, i) => (
               <div key={i} style={{ ...styles.subtaskRow, borderBottom: `1px solid ${theme.border}` }}>
                 <div style={{ ...styles.subtaskBullet, background: theme.primary }} />
@@ -159,7 +231,6 @@ export default function CreateTaskModal({ user, onSubmit, onClose }) {
               </div>
             ))}
 
-            {/* Add new subtask */}
             <div style={styles.addRow}>
               <input
                 style={{ ...inp, flex: 1 }}
@@ -168,10 +239,7 @@ export default function CreateTaskModal({ user, onSubmit, onClose }) {
                 onChange={e => setNewSubtask(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && addSubtask()}
               />
-              <button
-                style={{ ...styles.addBtn, background: theme.btnGradient }}
-                onClick={addSubtask}
-              >
+              <button style={{ ...styles.addBtn, background: theme.btnGradient }} onClick={addSubtask}>
                 <Icon name="plus" size={16} color="#fff" strokeWidth={2.2} />
               </button>
             </div>
@@ -179,14 +247,7 @@ export default function CreateTaskModal({ user, onSubmit, onClose }) {
 
           {/* Images */}
           <Field label="ATTACH IMAGES" theme={theme}>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              multiple
-              style={{ display: 'none' }}
-              onChange={handleImages}
-            />
+            <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={handleImages} />
             <button
               style={{ ...styles.attachBtn, borderColor: theme.border, color: theme.textMuted }}
               onClick={() => fileRef.current?.click()}
@@ -199,10 +260,7 @@ export default function CreateTaskModal({ user, onSubmit, onClose }) {
                 {images.map((f, i) => (
                   <div key={i} style={styles.thumbWrap}>
                     <img src={URL.createObjectURL(f)} alt="" style={styles.thumb} />
-                    <button
-                      style={styles.thumbRemove}
-                      onClick={() => setImages(prev => prev.filter((_, idx) => idx !== i))}
-                    >
+                    <button style={styles.thumbRemove} onClick={() => setImages(prev => prev.filter((_, idx) => idx !== i))}>
                       <Icon name="x" size={9} color="#fff" strokeWidth={2.5} />
                     </button>
                   </div>
@@ -221,12 +279,12 @@ export default function CreateTaskModal({ user, onSubmit, onClose }) {
           <button
             style={{
               ...styles.submitBtn,
-              background: title.trim() ? theme.btnGradient : 'rgba(255,255,255,0.07)',
-              color: title.trim() ? '#fff' : theme.textMuted,
-              cursor: title.trim() && !submitting ? 'pointer' : 'not-allowed',
+              background: effectiveTitle ? theme.btnGradient : 'rgba(255,255,255,0.07)',
+              color: effectiveTitle ? '#fff' : theme.textMuted,
+              cursor: effectiveTitle && !submitting ? 'pointer' : 'not-allowed',
             }}
             onClick={handleSubmit}
-            disabled={!title.trim() || submitting}
+            disabled={!effectiveTitle || submitting}
           >
             {submitting ? 'Launching...' : 'Launch Mission'}
           </button>
@@ -236,7 +294,6 @@ export default function CreateTaskModal({ user, onSubmit, onClose }) {
   );
 }
 
-// ── Field wrapper ─────────────────────────────────────────────────────────────
 function Field({ label, theme, children, action }) {
   return (
     <div style={styles.field}>
@@ -249,80 +306,33 @@ function Field({ label, theme, children, action }) {
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
 const styles = {
-  overlay: {
-    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.78)',
-    display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-    zIndex: 60, backdropFilter: 'blur(4px)',
-  },
-  modal: {
-    width: '100%', maxWidth: 540, maxHeight: '92vh',
-    display: 'flex', flexDirection: 'column', overflow: 'hidden',
-  },
-  header: {
-    display: 'flex', alignItems: 'center', padding: '0 16px',
-    height: 52, position: 'relative', flexShrink: 0,
-  },
-  accentBar: { position: 'absolute', top: 0, left: 0, right: 0, height: 2 },
-  headerTitle: {
-    flex: 1, fontSize: 15, fontWeight: 700, letterSpacing: '-0.3px',
-    fontFamily: 'Syne, sans-serif',
-  },
-  closeBtn: { background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', display: 'flex' },
-  body: {
-    flex: 1, overflowY: 'auto', padding: '14px 16px',
-    display: 'flex', flexDirection: 'column', gap: 14,
-  },
-  field: { display: 'flex', flexDirection: 'column', gap: 6 },
+  overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.78)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 60, backdropFilter: 'blur(4px)' },
+  modal:   { width: '100%', maxWidth: 540, maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+  header:  { display: 'flex', alignItems: 'center', padding: '0 16px', height: 52, position: 'relative', flexShrink: 0 },
+  accentBar:   { position: 'absolute', top: 0, left: 0, right: 0, height: 2 },
+  headerTitle: { flex: 1, fontSize: 15, fontWeight: 700, letterSpacing: '-0.3px', fontFamily: 'Syne, sans-serif' },
+  closeBtn:    { background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px', display: 'flex' },
+  body:    { flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 14 },
+  field:       { display: 'flex', flexDirection: 'column', gap: 6 },
   fieldHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
-  fieldLabel: { fontSize: 10, fontFamily: 'Space Mono, monospace', letterSpacing: '1.5px', fontWeight: 700 },
-  aiToggleBtn: {
-    display: 'flex', alignItems: 'center', gap: 4,
-    padding: '3px 8px', border: '1px solid', cursor: 'pointer',
-    fontSize: 10, fontWeight: 700, fontFamily: 'Space Mono, monospace', letterSpacing: '0.5px',
-    background: 'transparent', transition: 'all 0.15s',
-  },
-  subtaskRow: {
-    display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0',
-  },
+  fieldLabel:  { fontSize: 10, fontFamily: 'Space Mono, monospace', letterSpacing: '1.5px', fontWeight: 700 },
+  topicBtn: { width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', cursor: 'pointer', boxSizing: 'border-box', transition: 'all 0.15s' },
+  dropdown: { position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10, marginTop: 2, display: 'flex', flexDirection: 'column', maxHeight: 200, overflowY: 'auto' },
+  dropdownItem: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, fontFamily: 'DM Sans, sans-serif', textAlign: 'left', transition: 'background 0.1s' },
+  aiToggleBtn: { display: 'flex', alignItems: 'center', gap: 4, padding: '3px 8px', border: '1px solid', cursor: 'pointer', fontSize: 10, fontWeight: 700, fontFamily: 'Space Mono, monospace', letterSpacing: '0.5px', background: 'transparent', transition: 'all 0.15s' },
+  subtaskRow:  { display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0' },
   subtaskBullet: { width: 5, height: 5, borderRadius: '50%', flexShrink: 0 },
-  subtaskInput: {
-    flex: 1, border: 'none', outline: 'none', fontSize: 13,
-    fontFamily: 'DM Sans, sans-serif', padding: '2px 0',
-  },
-  removeBtn: { background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', display: 'flex' },
-  addRow: { display: 'flex', gap: 8, marginTop: 4 },
-  addBtn: {
-    width: 38, height: 38, border: 'none', cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-  },
-  attachBtn: {
-    display: 'flex', alignItems: 'center', gap: 8,
-    width: '100%', padding: '10px 12px', border: '1px dashed',
-    background: 'none', cursor: 'pointer', fontSize: 13,
-    fontFamily: 'DM Sans, sans-serif', textAlign: 'left',
-    boxSizing: 'border-box',
-  },
-  thumbRow: { display: 'flex', gap: 8, flexWrap: 'wrap' },
-  thumbWrap: { position: 'relative' },
-  thumb: { width: 56, height: 56, objectFit: 'cover' },
-  thumbRemove: {
-    position: 'absolute', top: -5, right: -5,
-    background: '#ef4444', border: 'none', cursor: 'pointer',
-    width: 16, height: 16, borderRadius: '50%',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
-  footer: {
-    display: 'flex', gap: 8, padding: '12px 16px', flexShrink: 0,
-  },
-  cancelBtn: {
-    padding: '10px 16px', background: 'none', border: 'none',
-    cursor: 'pointer', fontSize: 14, fontFamily: 'DM Sans, sans-serif',
-  },
-  submitBtn: {
-    flex: 1, padding: '12px 16px', border: 'none', fontSize: 14,
-    fontWeight: 600, fontFamily: 'Syne, sans-serif', letterSpacing: '-0.2px',
-    transition: 'all 0.15s',
-  },
+  subtaskInput:  { flex: 1, border: 'none', outline: 'none', fontSize: 13, fontFamily: 'DM Sans, sans-serif', padding: '2px 0' },
+  removeBtn:   { background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', display: 'flex' },
+  addRow:      { display: 'flex', gap: 8, marginTop: 4 },
+  addBtn:      { width: 38, height: 38, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  attachBtn:   { display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 12px', border: '1px dashed', background: 'none', cursor: 'pointer', fontSize: 13, fontFamily: 'DM Sans, sans-serif', textAlign: 'left', boxSizing: 'border-box' },
+  thumbRow:    { display: 'flex', gap: 8, flexWrap: 'wrap' },
+  thumbWrap:   { position: 'relative' },
+  thumb:       { width: 56, height: 56, objectFit: 'cover' },
+  thumbRemove: { position: 'absolute', top: -5, right: -5, background: '#ef4444', border: 'none', cursor: 'pointer', width: 16, height: 16, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  footer:      { display: 'flex', gap: 8, padding: '12px 16px', flexShrink: 0 },
+  cancelBtn:   { padding: '10px 16px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, fontFamily: 'DM Sans, sans-serif' },
+  submitBtn:   { flex: 1, padding: '12px 16px', border: 'none', fontSize: 14, fontWeight: 600, fontFamily: 'Syne, sans-serif', letterSpacing: '-0.2px', transition: 'all 0.15s' },
 };

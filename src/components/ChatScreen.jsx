@@ -52,10 +52,22 @@ export default function ChatScreen({ currentUser, onClose }) {
     }
   }, [messages, isNearBottom]);
 
-  // Scroll to bottom on first open
+  // Track first-load scroll (fires when messages first arrive, not on empty mount)
+  const hasScrolledInitially = useRef(false);
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'auto' });
-    setTimeout(() => inputRef.current?.focus(), 200);
+    if (!hasScrolledInitially.current && messages.length > 0) {
+      hasScrolledInitially.current = true;
+      // Use setTimeout to ensure DOM has rendered the messages
+      setTimeout(() => {
+        bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+        inputRef.current?.focus();
+      }, 50);
+    }
+  }, [messages]);
+
+  // Also focus input on open regardless
+  useEffect(() => {
+    setTimeout(() => inputRef.current?.focus(), 300);
   }, []);
 
   const handleSend = async () => {
@@ -163,14 +175,24 @@ export default function ChatScreen({ currentUser, onClose }) {
                 </div>
               )}
 
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: isMe ? 'flex-end' : 'flex-start', maxWidth: '72%', gap: 2 }}>
+                {/* Name label with emoji — only for received messages */}
+                {!isMe && (
+                  <div style={{ ...S.senderLabel, color: sender.primary }}>
+                    {sender.id === 'anurag' ? '⚡' : '🔥'} {sender.displayName}
+                  </div>
+                )}
+
               <div style={{
                 ...S.bubble,
-                background:              isMe ? theme.btnGradient : USERS[msg.sender].surface,
-                border:                  isMe ? 'none' : `1px solid ${USERS[msg.sender].border}`,
+                maxWidth: '100%',
+                background:              isMe ? theme.btnGradient : sender.surface,
+                border:                  isMe ? 'none' : `1px solid ${sender.border}`,
                 borderBottomRightRadius: isMe ? 2 : 12,
                 borderBottomLeftRadius:  isMe ? 12 : 2,
                 opacity:    isSending ? 0.7 : 1,
                 transition: 'opacity 0.2s',
+                boxShadow: isMe ? 'none' : `0 2px 8px ${sender.glow}22`,
               }}>
                 {msg.image_url && (
                   <img src={msg.image_url} alt="" style={S.bubbleImg} onClick={() => window.open(msg.image_url)} />
@@ -186,6 +208,7 @@ export default function ChatScreen({ currentUser, onClose }) {
                     <Icon name="check" size={10} color="rgba(255,255,255,0.55)" strokeWidth={2.5} />
                   )}
                 </div>
+              </div>
               </div>
             </div>
           );
@@ -275,4 +298,5 @@ const S = {
   attachBtn:  { background: 'none', border: 'none', cursor: 'pointer', padding: '6px 2px', display: 'flex', flexShrink: 0 },
   textInput:  { flex: 1, padding: '9px 11px', fontSize: 14, fontFamily: 'DM Sans, sans-serif', resize: 'none', maxHeight: 100, overflowY: 'auto', lineHeight: 1.4 },
   sendBtn:    { width: 40, height: 40, border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background 0.15s' },
+  senderLabel:{ fontSize: 10, fontFamily: 'Syne, sans-serif', fontWeight: 700, letterSpacing: '0.3px', paddingLeft: 2, marginBottom: 1 },
 };
