@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { USERS, TASK_STATUS } from '../lib/theme';
+import { USERS } from '../lib/theme';
 import { useTasks } from '../hooks/useData';
 import TaskCard, { Icon } from './TaskCard';
 import CreateTaskModal from './CreateTaskModal';

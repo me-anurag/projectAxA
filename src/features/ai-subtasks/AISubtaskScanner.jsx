@@ -17,20 +17,13 @@
 // STATUS: Coming Soon — UI placeholder wired into CreateTaskModal
 // ─────────────────────────────────────────────────────────────────────────────
 
-import React, { useState, useRef } from 'react';
+import React, { useRef } from 'react';
 import { Icon } from '../../components/TaskCard';
 
 // ── Coming Soon placeholder shown inside CreateTaskModal ───────────────────
 export default function AISubtaskScanner({ theme, onSubtasksGenerated }) {
-  const [state, setState] = useState('idle'); // idle | scanning | done
   const fileRef = useRef();
-
-  // When fully implemented, this calls useAISubtasks hook
-  const handleScan = () => {
-    setState('scanning');
-    // TODO: implement — see useAISubtasks.js
-    setTimeout(() => setState('idle'), 1500);
-  };
+  // TODO: wire up useAISubtasks hook — see FEATURE_SPEC.md
 
   return (
     <div style={{ ...styles.container, border: `1px dashed ${theme.border}` }}>
