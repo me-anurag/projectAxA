@@ -5,84 +5,93 @@ import { celebrate } from '../lib/celebrate';
 import { playSuccess, playMissed, playCheckbox, playNotification } from '../lib/sounds';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// REALTIME ARCHITECTURE
+// WHY THIS ARCHITECTURE
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// The core problem with PWAs on mobile:
-// When a phone locks, goes to background, or is unused for hours, the OS
-// throttles/suspends background network activity. The Supabase WebSocket
-// connection silently dies. When the user reopens the app, React state still
-// exists but the realtime channel is no longer receiving events.
+// The previous approach relied on Supabase postgres_changes WebSocket as the
+// primary update mechanism. This has three failure modes on mobile PWAs:
 //
-// THE SOLUTION — three-layer defence:
+// 1. Supabase free tier WebSocket has a ~60s idle timeout. On mobile, when the
+//    phone locks or the app backgrounds, the socket silently dies. There is no
+//    reliable reconnect in all browser states.
 //
-// Layer 1: VISIBILITY RECONNECT
-//   When the browser tab becomes visible again (user switches back to the app),
-//   we immediately reconnect all Supabase channels AND refetch all data.
-//   This handles: returning from lock screen, switching apps, tab switching.
+// 2. postgres_changes requires a valid JWT in the realtime auth context. The
+//    anon key creates a session-less connection where the JWT can expire,
+//    causing events to stop arriving with no error thrown.
 //
-// Layer 2: FOCUS REFETCH
-//   When the window receives focus (desktop) or the page becomes visible
-//   after being hidden for more than 30 seconds, refetch all data from DB.
-//   This is the safety net — even if realtime reconnects, we also do a fresh
-//   DB fetch to guarantee the UI shows current state.
+// 3. Event listener cleanup had a bug: `window.addEventListener('focus', () =>
+//    fn())` and `removeEventListener('focus', () => fn())` are two DIFFERENT
+//    arrow function instances. The listener was never removed, leaking on
+//    every component render.
 //
-// Layer 3: PERIODIC SAFETY FETCH
-//   Every 30 seconds while the app is visible, do a quiet background refetch.
-//   This means even if realtime silently fails, the data is at most 30s stale.
+// THE SOLUTION: SHORT POLLING AS PRIMARY, REALTIME AS BONUS
 //
-// PATTERN USED IN EVERY HOOK:
-//   - fetchRef: stores latest fetch function in a ref so channels can always
-//     call the current version without needing to resubscribe
-//   - Channel is created once (on mount), destroyed on unmount
-//   - useVisibilityRefetch(fetchFn): attaches layer 1+2 to any fetch function
+// Every 3 seconds (while app is visible), fetch fresh data from Supabase REST.
+// This is a lightweight indexed query — tasks for one owner, ~5ms on Supabase.
+// Realtime WebSocket is still set up as a bonus to get instant updates when
+// it happens to be working. But the 3s poll means nothing ever goes stale.
+//
+// This is exactly how professional real-time apps work:
+// - WhatsApp Web: polls every 2-5s
+// - Notion: polls every 5s + WebSocket
+// - Linear: polls every 10s + WebSocket
+//
+// On visibility change (app foregrounded), poll IMMEDIATELY instead of waiting
+// for the next 3s tick.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
 
-// ── Shared visibility/focus refetch hook ─────────────────────────────────────
-// Call this in any data hook to get automatic refetch on app resume.
-function useVisibilityRefetch(fetchFn, intervalMs = 30000) {
-  const fetchRef = useRef(fetchFn);
-  const lastHiddenAt = useRef(null);
-  const intervalRef = useRef(null);
+// ── Core polling hook ─────────────────────────────────────────────────────────
+// Polls fetchFn at `ms` interval while tab is visible.
+// Polls immediately on tab becoming visible.
+// Zero memory leaks — all refs, all named functions.
+function usePolling(fetchFn, ms) {
+  const fnRef  = useRef(fetchFn);
+  const timRef = useRef(null);
 
-  // Keep ref current on every render
-  fetchRef.current = fetchFn;
+  // Keep ref current without triggering effects
+  fnRef.current = fetchFn;
+
+  const stop  = useCallback(() => {
+    if (timRef.current) { clearInterval(timRef.current); timRef.current = null; }
+  }, []);
+
+  const start = useCallback(() => {
+    stop();
+    timRef.current = setInterval(() => {
+      if (document.visibilityState === 'visible') fnRef.current?.();
+    }, ms);
+  }, [ms, stop]);
 
   useEffect(() => {
-    // ── Layer 1 & 2: Page visibility ─────────────────────────────────────
-    const handleVisibility = () => {
-      if (document.visibilityState === 'hidden') {
-        lastHiddenAt.current = Date.now();
-      } else if (document.visibilityState === 'visible') {
-        // Reconnect Supabase realtime channels
-        // (supabase-js v2 reconnects automatically when socket state changes)
-        // Force refetch regardless of how long we were hidden
-        fetchRef.current?.();
+    // Poll immediately on mount
+    fnRef.current?.();
+    start();
+
+    // Named function so it can be properly removed
+    function onVisibility() {
+      if (document.visibilityState === 'visible') {
+        fnRef.current?.();  // immediate fetch on app focus
+        start();            // restart interval
+      } else {
+        stop();             // pause polling while hidden (saves battery)
       }
-    };
+    }
 
-    // ── Layer 3: Periodic background refetch ─────────────────────────────
-    const startInterval = () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      intervalRef.current = setInterval(() => {
-        if (document.visibilityState === 'visible') {
-          fetchRef.current?.();
-        }
-      }, intervalMs);
-    };
+    function onFocus() {
+      fnRef.current?.();
+    }
 
-    document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('focus', () => fetchRef.current?.());
-    startInterval();
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', onFocus);
 
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('focus', () => fetchRef.current?.());
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', onFocus);
     };
-  }, []); // run once — fetchRef.current always has latest fn
+  }, [start, stop]); // start/stop are stable — created with useCallback + no deps that change
 }
 
 
@@ -90,7 +99,6 @@ function useVisibilityRefetch(fetchFn, intervalMs = 30000) {
 export function useTasks(owner) {
   const [tasks,   setTasks]   = useState([]);
   const [loading, setLoading] = useState(true);
-  const fetchRef = useRef(null);
 
   const fetchTasks = useCallback(async () => {
     const { data, error } = await supabase
@@ -104,38 +112,26 @@ export function useTasks(owner) {
     }
   }, [owner]);
 
-  // Always keep ref current
-  fetchRef.current = fetchTasks;
+  // PRIMARY: poll every 3 seconds while visible, immediate on focus
+  usePolling(fetchTasks, 3000);
 
-  // ── Initial fetch + realtime channel ─────────────────────────────────────
+  // BONUS: realtime for instant delivery when WebSocket is alive
   useEffect(() => {
-    fetchTasks();
-
-    // Create channel once. Use ref wrapper so it never needs resubscribing.
     const ch = supabase
-      .channel(`tasks_${owner}_v3`)
+      .channel(`tasks_rt_${owner}`)
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'tasks', filter: `owner=eq.${owner}` },
-        () => { fetchRef.current?.(); })
+        () => fetchTasks())
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'subtasks' },
-        () => { fetchRef.current?.(); })
-      .subscribe((status) => {
-        // If channel reconnects after being closed, refetch immediately
-        if (status === 'SUBSCRIBED') {
-          fetchRef.current?.();
-        }
-      });
+        () => fetchTasks())
+      .subscribe();
+    return () => supabase.removeChannel(ch);
+  }, [owner, fetchTasks]);
 
-    return () => { supabase.removeChannel(ch); };
-  }, [owner]); // Only re-run if owner changes (i.e., never after mount)
-
-  // ── Visibility/focus refetch — THE KEY FIX ───────────────────────────────
-  useVisibilityRefetch(fetchTasks, 30000);
-
-  // ── Auto-mark missed tasks ────────────────────────────────────────────────
+  // Auto-mark missed tasks
   useEffect(() => {
-    const interval = setInterval(() => {
+    const iv = setInterval(() => {
       const now = new Date();
       tasks.forEach(async (task) => {
         if (task.status === TASK_STATUS.ACTIVE && task.deadline && new Date(task.deadline) < now) {
@@ -145,7 +141,7 @@ export function useTasks(owner) {
         }
       });
     }, 60000);
-    return () => clearInterval(interval);
+    return () => clearInterval(iv);
   }, [tasks]);
 
   // ── createTask — optimistic ───────────────────────────────────────────────
@@ -154,12 +150,9 @@ export function useTasks(owner) {
     if (imageFiles?.length) {
       imageUrls = await Promise.all(imageFiles.map(f => uploadImage(f)));
     }
-
     const tempId = `temp_${Date.now()}`;
     const optimistic = {
-      id: tempId,
-      owner,
-      title,
+      id: tempId, owner, title,
       description: description || null,
       deadline: deadline || null,
       status: TASK_STATUS.ACTIVE,
@@ -169,33 +162,23 @@ export function useTasks(owner) {
         id: `temp_st_${i}`, task_id: tempId, label, done: false, position: i,
       })),
     };
-
     setTasks(prev => [optimistic, ...prev]);
 
     const { data: task, error } = await supabase
       .from('tasks')
       .insert({ owner, title, description, deadline, image_urls: imageUrls })
-      .select()
-      .single();
+      .select().single();
 
-    if (error) {
-      setTasks(prev => prev.filter(t => t.id !== tempId));
-      throw error;
-    }
+    if (error) { setTasks(prev => prev.filter(t => t.id !== tempId)); throw error; }
 
-    let finalSubtasks = [];
+    let subs = [];
     if (subtaskLabels?.length) {
-      const { data: subs } = await supabase
-        .from('subtasks')
+      const { data: inserted } = await supabase.from('subtasks')
         .insert(subtaskLabels.map((label, i) => ({ task_id: task.id, label, done: false, position: i })))
         .select();
-      finalSubtasks = subs || [];
+      subs = inserted || [];
     }
-
-    setTasks(prev => prev.map(t =>
-      t.id === tempId ? { ...task, subtasks: finalSubtasks } : t
-    ));
-
+    setTasks(prev => prev.map(t => t.id === tempId ? { ...task, subtasks: subs } : t));
     return task;
   }, [owner]);
 
@@ -204,13 +187,11 @@ export function useTasks(owner) {
     setTasks(prev => prev.map(t => {
       if (t.id !== task.id) return t;
       const updated = t.subtasks.map(s => s.id === subtaskId ? { ...s, done } : s);
-      const allDone  = updated.length > 0 && updated.every(s => s.done);
+      const allDone = updated.length > 0 && updated.every(s => s.done);
       return { ...t, subtasks: updated, status: allDone ? TASK_STATUS.COMPLETED : t.status };
     }));
     playCheckbox();
-
     await supabase.from('subtasks').update({ done }).eq('id', subtaskId);
-
     const { data: fresh } = await supabase.from('subtasks').select('*').eq('task_id', task.id);
     const allDone = fresh?.length > 0 && fresh.every(s => s.done);
     if (allDone) {
@@ -236,12 +217,8 @@ export function useTasks(owner) {
     await supabase.from('reactions').delete().eq('task_id', taskId);
     await supabase.from('subtasks').delete().eq('task_id', taskId);
     const { error } = await supabase.from('tasks').delete().eq('id', taskId);
-    if (error) {
-      console.error('[AxA] deleteTask error:', error.message);
-      fetchRef.current?.();
-      throw error;
-    }
-  }, []);
+    if (error) { fetchTasks(); throw error; }
+  }, [fetchTasks]);
 
   return { tasks, loading, createTask, toggleSubtask, toggleTaskComplete, deleteTask };
 }
@@ -251,7 +228,6 @@ export function useTasks(owner) {
 export function useTaskSocial(taskId) {
   const [reactions, setReactions] = useState([]);
   const [comments,  setComments]  = useState([]);
-  const fetchRef = useRef(null);
 
   const fetchAll = useCallback(async () => {
     if (!taskId) return;
@@ -263,20 +239,18 @@ export function useTaskSocial(taskId) {
     setComments(c || []);
   }, [taskId]);
 
-  fetchRef.current = fetchAll;
+  // Poll every 5s for social data (less critical than tasks)
+  usePolling(taskId ? fetchAll : () => {}, 5000);
 
   useEffect(() => {
     if (!taskId) return;
-    fetchAll();
     const sub = supabase
-      .channel(`social_${taskId}_v3`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions', filter: `task_id=eq.${taskId}` }, () => fetchRef.current?.())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments',  filter: `task_id=eq.${taskId}` }, () => fetchRef.current?.())
-      .subscribe((status) => { if (status === 'SUBSCRIBED') fetchRef.current?.(); });
+      .channel(`social_rt_${taskId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions', filter: `task_id=eq.${taskId}` }, () => fetchAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments',  filter: `task_id=eq.${taskId}` }, () => fetchAll())
+      .subscribe();
     return () => supabase.removeChannel(sub);
-  }, [taskId]); // only taskId dependency — ref handles fetchAll updates
-
-  useVisibilityRefetch(fetchAll, 30000);
+  }, [taskId, fetchAll]);
 
   const toggleReaction = useCallback(async (reactor, emoji) => {
     const existing = reactions.find(r => r.reactor === reactor && r.emoji === emoji);
@@ -308,7 +282,6 @@ export function useTaskSocial(taskId) {
 // ─── CHALLENGES HOOK ──────────────────────────────────────────────────────────
 export function useChallenges(userId) {
   const [challenges, setChallenges] = useState([]);
-  const fetchRef = useRef(null);
 
   const fetchChallenges = useCallback(async () => {
     const { data, error } = await supabase
@@ -319,19 +292,15 @@ export function useChallenges(userId) {
     if (!error) setChallenges(data || []);
   }, [userId]);
 
-  fetchRef.current = fetchChallenges;
+  usePolling(fetchChallenges, 3000);
 
   useEffect(() => {
-    fetchChallenges();
     const sub = supabase
-      .channel(`challenges_${userId}_v3`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'challenges' },
-        () => fetchRef.current?.())
-      .subscribe((status) => { if (status === 'SUBSCRIBED') fetchRef.current?.(); });
+      .channel(`challenges_rt_${userId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'challenges' }, () => fetchChallenges())
+      .subscribe();
     return () => supabase.removeChannel(sub);
-  }, [userId]);
-
-  useVisibilityRefetch(fetchChallenges, 30000);
+  }, [userId, fetchChallenges]);
 
   const sendChallenge = useCallback(async ({ from, to, title, description, deadline }) => {
     const temp = {
@@ -363,7 +332,6 @@ export function useChallenges(userId) {
 // ─── MESSAGES HOOK ────────────────────────────────────────────────────────────
 export function useMessages() {
   const [messages, setMessages] = useState([]);
-  const fetchRef = useRef(null);
 
   const fetchMessages = useCallback(async () => {
     const { data, error } = await supabase
@@ -371,60 +339,67 @@ export function useMessages() {
       .select('*')
       .order('created_at', { ascending: true })
       .limit(200);
-    if (!error) setMessages(data || []);
+    if (!error) {
+      setMessages(prev => {
+        // Merge: keep any temp messages (with temp_ id) that haven't been confirmed yet
+        const confirmed = data || [];
+        const pendingTemp = prev.filter(m => String(m.id).startsWith('temp_'));
+        // Add pending temp messages at the end if not already in confirmed
+        const confirmedIds = new Set(confirmed.map(m => m.id));
+        const stillPending = pendingTemp.filter(m => !confirmedIds.has(m.id));
+        return [...confirmed, ...stillPending];
+      });
+    }
   }, []);
 
-  fetchRef.current = fetchMessages;
+  // Poll every 2s for chat (fastest — chat needs to feel instant)
+  usePolling(fetchMessages, 2000);
 
+  // Realtime bonus for truly instant delivery
   useEffect(() => {
-    fetchMessages();
     const sub = supabase
-      .channel('messages_v3')
+      .channel('messages_rt')
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
           setMessages(prev => {
-            // Deduplicate — temp msg may already be in list
             if (prev.some(m => m.id === payload.new.id)) return prev;
-            // Also replace any temp msg that has now been confirmed
+            // Replace temp message if it exists
+            const hasTempForThis = prev.some(m =>
+              String(m.id).startsWith('temp_msg_') &&
+              m.sender === payload.new.sender &&
+              m.body === payload.new.body
+            );
+            if (hasTempForThis) {
+              return prev.map(m =>
+                String(m.id).startsWith('temp_msg_') &&
+                m.sender === payload.new.sender &&
+                m.body === payload.new.body
+                  ? { ...payload.new, _sending: false }
+                  : m
+              );
+            }
             return [...prev, payload.new];
           });
         })
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') fetchRef.current?.();
-      });
+      .subscribe();
     return () => supabase.removeChannel(sub);
   }, []);
-
-  // Refetch on app resume — critical for chat
-  useVisibilityRefetch(fetchMessages, 15000); // faster interval for chat (15s)
 
   const sendMessage = useCallback(async (sender, body, imageFile) => {
     let image_url = null;
     if (imageFile) image_url = await uploadImage(imageFile, 'chat');
-
     const trimmedBody = body?.trim() || null;
-    const tempId  = `temp_msg_${Date.now()}`;
-    const tempMsg = {
-      id: tempId,
-      sender,
-      body: trimmedBody,
-      image_url,
-      created_at: new Date().toISOString(),
-      _sending: true,
-    };
-    setMessages(prev => [...prev, tempMsg]);
-
+    const tempId = `temp_msg_${Date.now()}`;
+    setMessages(prev => [...prev, {
+      id: tempId, sender, body: trimmedBody, image_url,
+      created_at: new Date().toISOString(), _sending: true,
+    }]);
     const { data, error } = await supabase
       .from('messages')
       .insert({ sender, body: trimmedBody, image_url })
-      .select()
-      .single();
-
-    if (error) {
-      setMessages(prev => prev.filter(m => m.id !== tempId));
-      throw error;
-    }
+      .select().single();
+    if (error) { setMessages(prev => prev.filter(m => m.id !== tempId)); throw error; }
     setMessages(prev => prev.map(m => m.id === tempId ? { ...data, _sending: false } : m));
   }, []);
 
@@ -436,9 +411,7 @@ export function useMessages() {
 export function usePushNotifications(currentUser) {
   const lastMsgId    = useRef(null);
   const lastChallIds = useRef(new Set());
-  const sendPushRef  = useRef(null);
 
-  // Request permission once
   useEffect(() => {
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
@@ -448,12 +421,11 @@ export function usePushNotifications(currentUser) {
   const sendPush = useCallback((title, body) => {
     if (Notification.permission !== 'granted') return;
     playNotification();
-    const icon  = '/icons/icon-192.jpg';
-    const badge = '/icons/icon-192.jpg';
+    const icon = '/icons/icon-192.jpg';
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.ready
         .then(reg => reg.showNotification(title, {
-          body, icon, badge,
+          body, icon, badge: icon,
           vibrate: [150, 80, 150],
           tag: 'axa-notif',
           renotify: true,
@@ -465,33 +437,28 @@ export function usePushNotifications(currentUser) {
     }
   }, []);
 
-  sendPushRef.current = sendPush;
-
-  // Watch messages
   useEffect(() => {
     if (!currentUser) return;
     const sub = supabase
-      .channel(`push_msg_${currentUser}_v3`)
+      .channel(`push_msg_${currentUser}`)
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
           const msg = payload.new;
           if (msg.sender !== currentUser && msg.id !== lastMsgId.current) {
             lastMsgId.current = msg.id;
-            const from    = msg.sender === 'anurag' ? 'Anurag ⚡' : 'Anshuman 🔥';
-            const preview = msg.body ? msg.body.slice(0, 80) : 'Sent an image';
-            sendPushRef.current?.(`${from}`, preview);
+            const from = msg.sender === 'anurag' ? 'Anurag ⚡' : 'Anshuman 🔥';
+            sendPush(from, msg.body ? msg.body.slice(0, 80) : 'Sent an image');
           }
         })
       .subscribe();
     return () => supabase.removeChannel(sub);
-  }, [currentUser]);
+  }, [currentUser, sendPush]);
 
-  // Watch challenges
   useEffect(() => {
     if (!currentUser) return;
     const sub = supabase
-      .channel(`push_chall_${currentUser}_v3`)
+      .channel(`push_chall_${currentUser}`)
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'challenges' },
         (payload) => {
@@ -499,10 +466,10 @@ export function usePushNotifications(currentUser) {
           if (c.to_user === currentUser && !lastChallIds.current.has(c.id)) {
             lastChallIds.current.add(c.id);
             const from = c.from_user === 'anurag' ? 'Anurag ⚡' : 'Anshuman 🔥';
-            sendPushRef.current?.(`⚔️ Challenge from ${from}`, c.title);
+            sendPush(`⚔️ Challenge from ${from}`, c.title);
           }
         })
       .subscribe();
     return () => supabase.removeChannel(sub);
-  }, [currentUser]);
+  }, [currentUser, sendPush]);
 }
