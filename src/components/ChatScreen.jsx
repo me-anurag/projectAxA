@@ -37,10 +37,10 @@ export default function ChatScreen({ currentUser, onClose }) {
 
     if (newCount === 0) return;
 
-    const shouldScroll =
-      justSentRef.current ||   // we just sent — always scroll
-      newCount > prevCount ||  // new message arrived — scroll only if near bottom
-        (newCount > prevCount && isNearBottom());
+    // const shouldScroll =
+    //   justSentRef.current ||   // we just sent — always scroll
+    //   newCount > prevCount ||  // new message arrived — scroll only if near bottom
+    //     (newCount > prevCount && isNearBottom());
 
     // For incoming new messages from other user, only scroll if near bottom
     const reallyNewMessages = newCount > prevCount;
