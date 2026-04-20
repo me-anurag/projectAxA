@@ -5,55 +5,26 @@ import { celebrate } from '../lib/celebrate';
 import { playSuccess, playMissed, playCheckbox, playNotification } from '../lib/sounds';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WHY THIS ARCHITECTURE
-// ─────────────────────────────────────────────────────────────────────────────
+// ARCHITECTURE: Short polling (primary) + Realtime WebSocket (bonus)
 //
-// The previous approach relied on Supabase postgres_changes WebSocket as the
-// primary update mechanism. This has three failure modes on mobile PWAs:
+// Polling intervals:
+//   Tasks, challenges: every 3 seconds
+//   Messages: every 2 seconds
 //
-// 1. Supabase free tier WebSocket has a ~60s idle timeout. On mobile, when the
-//    phone locks or the app backgrounds, the socket silently dies. There is no
-//    reliable reconnect in all browser states.
-//
-// 2. postgres_changes requires a valid JWT in the realtime auth context. The
-//    anon key creates a session-less connection where the JWT can expire,
-//    causing events to stop arriving with no error thrown.
-//
-// 3. Event listener cleanup had a bug: `window.addEventListener('focus', () =>
-//    fn())` and `removeEventListener('focus', () => fn())` are two DIFFERENT
-//    arrow function instances. The listener was never removed, leaking on
-//    every component render.
-//
-// THE SOLUTION: SHORT POLLING AS PRIMARY, REALTIME AS BONUS
-//
-// Every 3 seconds (while app is visible), fetch fresh data from Supabase REST.
-// This is a lightweight indexed query — tasks for one owner, ~5ms on Supabase.
-// Realtime WebSocket is still set up as a bonus to get instant updates when
-// it happens to be working. But the 3s poll means nothing ever goes stale.
-//
-// This is exactly how professional real-time apps work:
-// - WhatsApp Web: polls every 2-5s
-// - Notion: polls every 5s + WebSocket
-// - Linear: polls every 10s + WebSocket
-//
-// On visibility change (app foregrounded), poll IMMEDIATELY instead of waiting
-// for the next 3s tick.
-//
+// Key principle: fetchMessages only calls setMessages when the actual content
+// has changed. This prevents re-renders (and scroll hijacking) on every poll
+// tick when no new messages arrived.
 // ─────────────────────────────────────────────────────────────────────────────
 
 
 // ── Core polling hook ─────────────────────────────────────────────────────────
-// Polls fetchFn at `ms` interval while tab is visible.
-// Polls immediately on tab becoming visible.
-// Zero memory leaks — all refs, all named functions.
 function usePolling(fetchFn, ms) {
   const fnRef  = useRef(fetchFn);
   const timRef = useRef(null);
 
-  // Keep ref current without triggering effects
   fnRef.current = fetchFn;
 
-  const stop  = useCallback(() => {
+  const stop = useCallback(() => {
     if (timRef.current) { clearInterval(timRef.current); timRef.current = null; }
   }, []);
 
@@ -65,17 +36,15 @@ function usePolling(fetchFn, ms) {
   }, [ms, stop]);
 
   useEffect(() => {
-    // Poll immediately on mount
     fnRef.current?.();
     start();
 
-    // Named function so it can be properly removed
     function onVisibility() {
       if (document.visibilityState === 'visible') {
-        fnRef.current?.();  // immediate fetch on app focus
-        start();            // restart interval
+        fnRef.current?.();
+        start();
       } else {
-        stop();             // pause polling while hidden (saves battery)
+        stop();
       }
     }
 
@@ -91,7 +60,7 @@ function usePolling(fetchFn, ms) {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('focus', onFocus);
     };
-  }, [start, stop]); // start/stop are stable — created with useCallback + no deps that change
+  }, [start, stop]);
 }
 
 
@@ -112,10 +81,8 @@ export function useTasks(owner) {
     }
   }, [owner]);
 
-  // PRIMARY: poll every 3 seconds while visible, immediate on focus
   usePolling(fetchTasks, 3000);
 
-  // BONUS: realtime for instant delivery when WebSocket is alive
   useEffect(() => {
     const ch = supabase
       .channel(`tasks_rt_${owner}`)
@@ -129,7 +96,6 @@ export function useTasks(owner) {
     return () => supabase.removeChannel(ch);
   }, [owner, fetchTasks]);
 
-  // Auto-mark missed tasks
   useEffect(() => {
     const iv = setInterval(() => {
       const now = new Date();
@@ -144,7 +110,6 @@ export function useTasks(owner) {
     return () => clearInterval(iv);
   }, [tasks]);
 
-  // ── createTask — optimistic ───────────────────────────────────────────────
   const createTask = useCallback(async ({ title, description, deadline, subtaskLabels, imageFiles }) => {
     let imageUrls = [];
     if (imageFiles?.length) {
@@ -182,7 +147,6 @@ export function useTasks(owner) {
     return task;
   }, [owner]);
 
-  // ── toggleSubtask — optimistic ────────────────────────────────────────────
   const toggleSubtask = useCallback(async (subtaskId, done, task, userTheme) => {
     setTasks(prev => prev.map(t => {
       if (t.id !== task.id) return t;
@@ -201,7 +165,6 @@ export function useTasks(owner) {
     }
   }, []);
 
-  // ── toggleTaskComplete — optimistic ───────────────────────────────────────
   const toggleTaskComplete = useCallback(async (task, userTheme) => {
     if (task.status === TASK_STATUS.MISSED) return;
     const newStatus = task.status === TASK_STATUS.COMPLETED ? TASK_STATUS.ACTIVE : TASK_STATUS.COMPLETED;
@@ -210,7 +173,6 @@ export function useTasks(owner) {
     await supabase.from('tasks').update({ status: newStatus }).eq('id', task.id);
   }, []);
 
-  // ── deleteTask — optimistic ───────────────────────────────────────────────
   const deleteTask = useCallback(async (taskId) => {
     setTasks(prev => prev.filter(t => t.id !== taskId));
     await supabase.from('comments').delete().eq('task_id', taskId);
@@ -224,7 +186,7 @@ export function useTasks(owner) {
 }
 
 
-// ─── TASK SOCIAL (reactions + comments) ──────────────────────────────────────
+// ─── TASK SOCIAL ──────────────────────────────────────────────────────────────
 export function useTaskSocial(taskId) {
   const [reactions, setReactions] = useState([]);
   const [comments,  setComments]  = useState([]);
@@ -239,7 +201,6 @@ export function useTaskSocial(taskId) {
     setComments(c || []);
   }, [taskId]);
 
-  // Poll every 5s for social data (less critical than tasks)
   usePolling(taskId ? fetchAll : () => {}, 5000);
 
   useEffect(() => {
@@ -332,6 +293,9 @@ export function useChallenges(userId) {
 // ─── MESSAGES HOOK ────────────────────────────────────────────────────────────
 export function useMessages() {
   const [messages, setMessages] = useState([]);
+  // Track the last confirmed message ID so we only update state when content changes
+  const lastConfirmedIdRef = useRef(null);
+  const lastCountRef = useRef(0);
 
   const fetchMessages = useCallback(async () => {
     const { data, error } = await supabase
@@ -339,23 +303,35 @@ export function useMessages() {
       .select('*')
       .order('created_at', { ascending: true })
       .limit(200);
-    if (!error) {
-      setMessages(prev => {
-        // Merge: keep any temp messages (with temp_ id) that haven't been confirmed yet
-        const confirmed = data || [];
-        const pendingTemp = prev.filter(m => String(m.id).startsWith('temp_'));
-        // Add pending temp messages at the end if not already in confirmed
-        const confirmedIds = new Set(confirmed.map(m => m.id));
-        const stillPending = pendingTemp.filter(m => !confirmedIds.has(m.id));
-        return [...confirmed, ...stillPending];
-      });
-    }
+
+    if (error || !data) return;
+
+    // ── KEY: Only update state if something actually changed ──────────────
+    // Compare the last message ID and total count.
+    // If identical to previous fetch → skip setMessages entirely.
+    // This prevents unnecessary re-renders (and scroll hijacking) on idle polls.
+    const lastId    = data.length > 0 ? data[data.length - 1].id : null;
+    const count     = data.length;
+    const unchanged = lastId === lastConfirmedIdRef.current && count === lastCountRef.current;
+
+    if (unchanged) return; // nothing new — don't touch state
+
+    lastConfirmedIdRef.current = lastId;
+    lastCountRef.current       = count;
+
+    setMessages(prev => {
+      // Keep any temp (optimistic) messages that haven't been confirmed yet
+      const confirmedIds = new Set(data.map(m => m.id));
+      const stillPending = prev.filter(m =>
+        String(m.id).startsWith('temp_') && !confirmedIds.has(m.id)
+      );
+      return [...data, ...stillPending];
+    });
   }, []);
 
-  // Poll every 2s for chat (fastest — chat needs to feel instant)
   usePolling(fetchMessages, 2000);
 
-  // Realtime bonus for truly instant delivery
+  // Realtime for instant delivery
   useEffect(() => {
     const sub = supabase
       .channel('messages_rt')
@@ -364,23 +340,22 @@ export function useMessages() {
         (payload) => {
           setMessages(prev => {
             if (prev.some(m => m.id === payload.new.id)) return prev;
-            // Replace temp message if it exists
-            const hasTempForThis = prev.some(m =>
+            // Replace matching temp message if present
+            const tempIdx = prev.findIndex(m =>
               String(m.id).startsWith('temp_msg_') &&
               m.sender === payload.new.sender &&
               m.body === payload.new.body
             );
-            if (hasTempForThis) {
-              return prev.map(m =>
-                String(m.id).startsWith('temp_msg_') &&
-                m.sender === payload.new.sender &&
-                m.body === payload.new.body
-                  ? { ...payload.new, _sending: false }
-                  : m
-              );
+            if (tempIdx !== -1) {
+              const next = [...prev];
+              next[tempIdx] = { ...payload.new, _sending: false };
+              return next;
             }
             return [...prev, payload.new];
           });
+          // Update tracking refs so next poll doesn't think something changed
+          lastConfirmedIdRef.current = payload.new.id;
+          lastCountRef.current += 1;
         })
       .subscribe();
     return () => supabase.removeChannel(sub);
@@ -401,6 +376,9 @@ export function useMessages() {
       .select().single();
     if (error) { setMessages(prev => prev.filter(m => m.id !== tempId)); throw error; }
     setMessages(prev => prev.map(m => m.id === tempId ? { ...data, _sending: false } : m));
+    // Update tracking so the next poll doesn't re-fire scroll
+    lastConfirmedIdRef.current = data.id;
+    lastCountRef.current += 1;
   }, []);
 
   return { messages, sendMessage };
