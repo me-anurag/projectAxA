@@ -12,7 +12,7 @@ export default function MusicPanel({ theme, music, onClose }) {
     settings, allSongs, currentSong,
     toggleEnabled, setMode, selectSong,
     addSong, deleteSong, renameSong,
-    startPlayback, stopPlayback,
+    startPlayback
   } = music;
 
   const [renamingId, setRenamingId] = useState(null);
