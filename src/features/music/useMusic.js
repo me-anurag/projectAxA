@@ -19,10 +19,24 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 
 // Default songs — these are served from /sounds/ (bundled with app)
 // Cannot be deleted by users
+// export const DEFAULT_SONGS = [
+//   { id: 'default_tibetan', title: 'Tibetan Meditation', artist: 'Default', src: '/sounds/song_tibetan.mp3',  isDefault: true },
+//   { id: 'default_bandeya', title: 'Bandeya Rey Bandeya', artist: 'Default', src: '/sounds/song_bandeya.mp3', isDefault: true },
+//   { id: 'default_aagaaz',  title: 'Aagaaz',              artist: 'Default', src: '/sounds/song_aagaaz.mp3',  isDefault: true },
+// ];
 export const DEFAULT_SONGS = [
-  { id: 'default_tibetan', title: 'Tibetan Meditation', artist: 'Default', src: '/sounds/song_tibetan.mp3',  isDefault: true },
+  { id: 'default_silent_ember', title: 'Silent Ember', artist: 'AxA Soundtrack', src: '/sounds/silent_ember.mp3', isDefault: true },
+  { id: 'default_tibetan', title: 'Tibetan Meditation', artist: 'Default', src: '/sounds/song_tibetan.mp3', isDefault: true },
   { id: 'default_bandeya', title: 'Bandeya Rey Bandeya', artist: 'Default', src: '/sounds/song_bandeya.mp3', isDefault: true },
-  { id: 'default_aagaaz',  title: 'Aagaaz',              artist: 'Default', src: '/sounds/song_aagaaz.mp3',  isDefault: true },
+  { id: 'default_aagaaz', title: 'Aagaaz', artist: 'Default', src: '/sounds/song_aagaaz.mp3', isDefault: true },
+  { id: 'default_song_time', title: 'Time', artist: 'AxA Soundtrack', src: '/sounds/song_time.mp3', isDefault: true },
+  { id: 'default_rise_from_within', title: 'Rise From Within', artist: 'AxA Soundtrack', src: '/sounds/rise_from_within.mp3', isDefault: true },
+  { id: 'default_inspire', title: 'Inspire', artist: 'AxA Soundtrack', src: '/sounds/Inspire.mp3', isDefault: true },
+  { id: 'default_zen_garden', title: 'Zen Garden', artist: 'AxA Soundtrack', src: '/sounds/Zen_garden.mp3', isDefault: true },
+  { id: 'default_awaken_yourself', title: 'Awaken Yourself', artist: 'AxA Soundtrack', src: '/sounds/Awaken_yourself.mp3', isDefault: true },
+  { id: 'default_positive_aura', title: 'Positive Aura', artist: 'AxA Soundtrack', src: '/sounds/positive_aura.mp3', isDefault: true },
+  { id: 'default_calm_yourself', title: 'Calm Yourself', artist: 'AxA Soundtrack', src: '/sounds/calm_yourself.mp3', isDefault: true },
+  { id: 'default_wind_chimes', title: 'Wind Chimes', artist: 'AxA Soundtrack', src: '/sounds/wind_chimes.mp3', isDefault: true },
 ];
 
 const SETTINGS_KEY = (u) => `axa_music_settings_${u}`;

@@ -133,7 +133,7 @@ export default function MusicPanel({ theme, music, onClose }) {
                       {song.title}
                     </div>
                     <div style={{ ...S.songArtist, color: theme.textMuted }}>
-                      {song.isDefault ? 'Default · Cannot delete' : song.artist}
+                      {song.isDefault ? 'Default · AxA Musics' : song.artist}
                     </div>
                   </div>
                 )}
