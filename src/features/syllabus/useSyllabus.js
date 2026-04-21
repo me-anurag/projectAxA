@@ -1,33 +1,29 @@
 import { useState, useCallback, useEffect } from 'react';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Syllabus data is stored in localStorage per user.
-// Key: `axa_syllabus_${userId}`
+// COVERAGE DESIGN (corrected):
 //
-// Data shape:
-// {
-//   headings: [
-//     {
-//       id: string,
-//       title: string,
-//       subtopics: [
-//         { id: string, title: string, done: boolean }
-//       ]
-//     }
+// coverage shape: {
+//   [headingId | 'custom']: [
+//     { taskTitle, description, subtasks[], date }
 //   ]
 // }
 //
-// Mission coverage is stored separately:
-// Key: `axa_coverage_${userId}`
-// {
-//   [headingId]: [
-//     { taskTitle: string, description: string, subtasks: string[], date: string }
-//   ]
-// }
+// 'custom' is a special bucket for missions with no syllabus heading.
+// This means EVERY mission gets tracked in coverage.
+//
+// SyllabusScreen Coverage tab shows:
+//   - All syllabus headings (even those with 0 missions)
+//   - A "Custom / Free-form" section at the bottom for missions without a heading
+//
+// Coverage saves synchronously inside recordMission (not in useEffect)
+// to survive modal unmount before the effect fires.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SYLLABUS_KEY = (userId) => `axa_syllabus_${userId}`;
-const COVERAGE_KEY = (userId) => `axa_coverage_${userId}`;
+export const CUSTOM_COVERAGE_KEY = 'custom';
+
+const SYLLABUS_KEY = (u) => `axa_syllabus_${u}`;
+const COVERAGE_KEY = (u) => `axa_coverage_${u}`;
 
 function genId() {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -36,11 +32,8 @@ function genId() {
 function loadSyllabus(userId) {
   try {
     const raw = localStorage.getItem(SYLLABUS_KEY(userId));
-    if (!raw) return { headings: [] };
-    return JSON.parse(raw);
-  } catch {
-    return { headings: [] };
-  }
+    return raw ? JSON.parse(raw) : { headings: [] };
+  } catch { return { headings: [] }; }
 }
 
 function saveSyllabus(userId, data) {
@@ -50,30 +43,26 @@ function saveSyllabus(userId, data) {
 function loadCoverage(userId) {
   try {
     const raw = localStorage.getItem(COVERAGE_KEY(userId));
-    if (!raw) return {};
-    return JSON.parse(raw);
-  } catch {
-    return {};
-  }
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
 }
 
 function saveCoverage(userId, data) {
   localStorage.setItem(COVERAGE_KEY(userId), JSON.stringify(data));
 }
 
-// ── Main hook ────────────────────────────────────────────────────────────────
 export function useSyllabus(userId) {
-  const [syllabus, setSyllabusState] = useState(() => loadSyllabus(userId));
-  const [coverage, setCoverageState] = useState(() => loadCoverage(userId));
+  const [syllabus,  setSyllabusState] = useState(() => loadSyllabus(userId));
+  const [coverage,  setCoverageState] = useState(() => loadCoverage(userId));
 
-  // Persist on every change
-  useEffect(() => {
-    saveSyllabus(userId, syllabus);
-  }, [userId, syllabus]);
+  // Persist syllabus on change
+  useEffect(() => { saveSyllabus(userId, syllabus); }, [userId, syllabus]);
 
+  // Re-read coverage from localStorage when screen opens
+  // (CreateTaskModal writes directly to localStorage, not to this hook's state)
   useEffect(() => {
-    saveCoverage(userId, coverage);
-  }, [userId, coverage]);
+    setCoverageState(loadCoverage(userId));
+  }, [userId]);
 
   // ── Headings ──────────────────────────────────────────────────────────────
   const addHeading = useCallback((title) => {
@@ -144,41 +133,47 @@ export function useSyllabus(userId) {
     }));
   }, []);
 
-  // ── Mission coverage ───────────────────────────────────────────────────────
-  // Called when a task is created with a syllabus heading selected
+  // ── recordMission — SYNCHRONOUS localStorage write ────────────────────────
+  // Called from CreateTaskModal which unmounts immediately after.
+  // headingId: a syllabus heading id, OR null/undefined for custom missions.
+  // Custom missions go under the 'custom' key.
   const recordMission = useCallback((headingId, { taskTitle, description, subtasks, date }) => {
-    setCoverageState(prev => {
-      const existing = prev[headingId] || [];
-      return {
-        ...prev,
-        [headingId]: [...existing, { taskTitle, description: description || '', subtasks: subtasks || [], date: date || new Date().toISOString() }],
-      };
-    });
-  }, []);
+    const key = headingId || CUSTOM_COVERAGE_KEY;
+    // Read fresh from localStorage (not stale React state)
+    const current = loadCoverage(userId);
+    const entry = {
+      taskTitle,
+      description: description || '',
+      subtasks: subtasks || [],
+      date: date || new Date().toISOString(),
+    };
+    const updated = {
+      ...current,
+      [key]: [...(current[key] || []), entry],
+    };
+    // Synchronous — guaranteed before component unmount
+    saveCoverage(userId, updated);
+    // Update React state so SyllabusScreen refreshes if open
+    setCoverageState(updated);
+  }, [userId]);
 
   const deleteCoverageEntry = useCallback((headingId, entryIdx) => {
-    setCoverageState(prev => ({
-      ...prev,
-      [headingId]: (prev[headingId] || []).filter((_, i) => i !== entryIdx),
-    }));
-  }, []);
+    setCoverageState(prev => {
+      const updated = {
+        ...prev,
+        [headingId]: (prev[headingId] || []).filter((_, i) => i !== entryIdx),
+      };
+      saveCoverage(userId, updated);
+      return updated;
+    });
+  }, [userId]);
 
-  // ── Derived ───────────────────────────────────────────────────────────────
-  // List of just heading titles for dropdowns
   const headingOptions = syllabus.headings.map(h => ({ id: h.id, title: h.title }));
 
   return {
-    syllabus,
-    coverage,
-    headingOptions,
-    addHeading,
-    editHeading,
-    deleteHeading,
-    addSubtopic,
-    editSubtopic,
-    toggleSubtopic,
-    deleteSubtopic,
-    recordMission,
-    deleteCoverageEntry,
+    syllabus, coverage, headingOptions,
+    addHeading, editHeading, deleteHeading,
+    addSubtopic, editSubtopic, toggleSubtopic, deleteSubtopic,
+    recordMission, deleteCoverageEntry,
   };
 }

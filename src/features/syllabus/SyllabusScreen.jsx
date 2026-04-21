@@ -270,77 +270,131 @@ function AddHeadingInput({ theme, value, onChange, onAdd }) {
 }
 
 // ── TAB 2: Mission Coverage ───────────────────────────────────────────────────
+// Shows ALL headings (including those with 0 missions so user sees the full picture)
+// + a "Custom" section at bottom for missions with no heading selected
 function CoverageTab({ theme, syllabus, coverage, onDeleteEntry }) {
   const [expandedIds, setExpandedIds] = useState({});
-  const toggleExpand = (id) => setExpandedIds(prev => ({ ...prev, [id]: !prev[id] }));
+  // Default all to expanded so user sees content immediately
+  const isExpanded = (id) => expandedIds[id] !== false;
+  const toggleExpand = (id) => setExpandedIds(prev => ({ ...prev, [id]: !isExpanded(id) }));
 
-  const headingsWithCoverage = syllabus.headings.filter(h => (coverage[h.id] || []).length > 0);
+  const totalMissions = Object.values(coverage).reduce((acc, arr) => acc + arr.length, 0);
 
-  if (headingsWithCoverage.length === 0) {
+  if (syllabus.headings.length === 0 && totalMissions === 0) {
     return (
       <div style={S.emptyWrap}>
         <Icon name="target" size={36} color={theme.textMuted} strokeWidth={1.2} />
         <p style={{ ...S.emptyTitle, color: theme.text }}>No coverage yet</p>
         <p style={{ ...S.emptyDesc, color: theme.textMuted }}>
-          When you create a Mission and pick a syllabus heading, it appears here as a record of what you've covered.
+          Every mission you launch gets recorded here automatically — whether you pick a syllabus topic or use a custom title.
         </p>
       </div>
     );
   }
 
+  const customEntries = coverage['custom'] || [];
+
   return (
     <div style={S.listWrap}>
+      {/* All syllabus headings — shown even if 0 missions */}
       {syllabus.headings.map(heading => {
         const entries = coverage[heading.id] || [];
-        if (entries.length === 0) return null;
-        const expanded = expandedIds[heading.id] !== false;
+        const expanded = isExpanded(heading.id);
 
         return (
-          <div key={heading.id} style={{ ...S.headingCard, background: theme.surface, border: `1px solid ${theme.border}` }}>
-            {/* Heading toggle */}
+          <div key={heading.id} style={{ ...S.headingCard, background: theme.surface, border: `1px solid ${entries.length > 0 ? theme.borderHigh : theme.border}` }}>
             <button style={S.coverageHeadingRow} onClick={() => toggleExpand(heading.id)}>
-              <span style={{ ...S.coverageHeadingText, color: theme.text }}>{heading.title}</span>
-              <span style={{ ...S.coverageCount, color: theme.primary, background: `${theme.primary}18` }}>
-                {entries.length} mission{entries.length > 1 ? 's' : ''}
-              </span>
+              <div style={{ flex: 1, textAlign: 'left' }}>
+                <div style={{ ...S.coverageHeadingText, color: theme.text }}>{heading.title}</div>
+                {entries.length === 0 && (
+                  <div style={{ fontSize: 10, fontFamily: 'Space Mono, monospace', color: theme.textMuted, marginTop: 2 }}>
+                    No missions yet
+                  </div>
+                )}
+              </div>
+              {entries.length > 0 && (
+                <span style={{ ...S.coverageCount, color: theme.primary, background: `${theme.primary}18` }}>
+                  {entries.length} mission{entries.length > 1 ? 's' : ''}
+                </span>
+              )}
               <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} color={theme.textMuted} />
             </button>
 
-            {expanded && (
+            {expanded && entries.length > 0 && (
               <div style={{ borderTop: `1px solid ${theme.border}` }}>
                 {entries.map((entry, idx) => (
-                  <div key={idx} style={{ ...S.coverageEntry, borderBottom: `1px solid ${theme.border}` }}>
-                    <div style={S.coverageEntryTop}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ ...S.coverageTaskTitle, color: theme.text }}>{entry.taskTitle}</div>
-                        {entry.description && (
-                          <div style={{ ...S.coverageDesc, color: theme.textMuted }}>{entry.description}</div>
-                        )}
-                        {entry.subtasks?.length > 0 && (
-                          <div style={S.coverageSubtasks}>
-                            {entry.subtasks.map((s, si) => (
-                              <span key={si} style={{ ...S.coverageSubtaskPill, color: theme.primary, background: `${theme.primary}14`, border: `1px solid ${theme.primary}28` }}>
-                                {s}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                        <div style={{ ...S.coverageDate, color: theme.textMuted }}>
-                          <Icon name="clock" size={9} color={theme.textMuted} strokeWidth={2} />
-                          {format(new Date(entry.date), 'MMM d, yyyy · HH:mm')}
-                        </div>
-                      </div>
-                      <button style={S.iconBtn} onClick={() => onDeleteEntry(heading.id, idx)}>
-                        <Icon name="trash" size={13} color={theme.textMuted} />
-                      </button>
-                    </div>
-                  </div>
+                  <CoverageEntry key={idx} entry={entry} idx={idx} headingId={heading.id} theme={theme} onDelete={onDeleteEntry} />
                 ))}
               </div>
             )}
           </div>
         );
       })}
+
+      {/* Custom / free-form missions */}
+      {customEntries.length > 0 && (
+        <div style={{ ...S.headingCard, background: theme.surface, border: `1px solid ${theme.borderHigh}` }}>
+          <button style={S.coverageHeadingRow} onClick={() => toggleExpand('custom')}>
+            <div style={{ flex: 1, textAlign: 'left' }}>
+              <div style={{ ...S.coverageHeadingText, color: theme.text }}>Custom Missions</div>
+              <div style={{ fontSize: 10, fontFamily: 'Space Mono, monospace', color: theme.textMuted, marginTop: 2 }}>
+                Missions without a syllabus topic
+              </div>
+            </div>
+            <span style={{ ...S.coverageCount, color: theme.primary, background: `${theme.primary}18` }}>
+              {customEntries.length}
+            </span>
+            <Icon name={isExpanded('custom') ? 'chevronUp' : 'chevronDown'} size={14} color={theme.textMuted} />
+          </button>
+          {isExpanded('custom') && (
+            <div style={{ borderTop: `1px solid ${theme.border}` }}>
+              {customEntries.map((entry, idx) => (
+                <CoverageEntry key={idx} entry={entry} idx={idx} headingId="custom" theme={theme} onDelete={onDeleteEntry} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Empty hint when headings exist but no missions yet */}
+      {totalMissions === 0 && syllabus.headings.length > 0 && (
+        <div style={{ padding: '16px 12px', textAlign: 'center' }}>
+          <p style={{ fontSize: 11, fontFamily: 'Space Mono, monospace', color: theme.textMuted, letterSpacing: '0.3px', lineHeight: 1.7 }}>
+            Launch a mission and pick a syllabus topic — it will appear here automatically.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CoverageEntry({ entry, idx, headingId, theme, onDelete }) {
+  return (
+    <div style={{ ...S.coverageEntry, borderBottom: `1px solid ${theme.border}` }}>
+      <div style={S.coverageEntryTop}>
+        <div style={{ flex: 1 }}>
+          <div style={{ ...S.coverageTaskTitle, color: theme.text }}>{entry.taskTitle}</div>
+          {entry.description && (
+            <div style={{ ...S.coverageDesc, color: theme.textMuted }}>{entry.description}</div>
+          )}
+          {entry.subtasks?.length > 0 && (
+            <div style={S.coverageSubtasks}>
+              {entry.subtasks.map((s, si) => (
+                <span key={si} style={{ ...S.coverageSubtaskPill, color: theme.primary, background: `${theme.primary}14`, border: `1px solid ${theme.primary}28` }}>
+                  {s}
+                </span>
+              ))}
+            </div>
+          )}
+          <div style={{ ...S.coverageDate, color: theme.textMuted }}>
+            <Icon name="clock" size={9} color={theme.textMuted} strokeWidth={2} />
+            {format(new Date(entry.date), 'MMM d, yyyy · HH:mm')}
+          </div>
+        </div>
+        <button style={S.iconBtn} onClick={() => onDelete(headingId, idx)}>
+          <Icon name="trash" size={13} color={theme.textMuted} />
+        </button>
+      </div>
     </div>
   );
 }

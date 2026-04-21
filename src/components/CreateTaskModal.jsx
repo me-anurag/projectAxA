@@ -54,15 +54,15 @@ export default function CreateTaskModal({ user, onSubmit, onClose }) {
         imageFiles: images,
       });
 
-      // Record coverage if a syllabus heading was selected
-      if (selectedTopic) {
-        recordMission(selectedTopic, {
-          taskTitle:   effectiveTitle,
-          description: description.trim() || '',
-          subtasks:    subtasks.filter(s => s.trim()),
-          date:        new Date().toISOString(),
-        });
-      }
+      // Record ALL missions in coverage:
+      //   - With heading → stored under that headingId
+      //   - Without heading (custom title) → stored under 'custom' key
+      recordMission(selectedTopic || null, {
+        taskTitle:   effectiveTitle,
+        description: description.trim() || '',
+        subtasks:    subtasks.filter(s => s.trim()),
+        date:        new Date().toISOString(),
+      });
 
       onClose();
     } catch (e) {

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { USERS, VIEWS } from './lib/theme';
 import { useChallenges, usePushNotifications } from './hooks/useData';
 import { playStartup, playClick, isSoundEnabled, setSoundEnabled, preloadSounds } from './lib/sounds';
+import { useMusic } from './features/music/useMusic';
 import Onboarding from './pages/Onboarding';
 import Navbar from './components/Navbar';
 import BottomBar from './components/BottomBar';
@@ -13,8 +14,8 @@ import SyllabusScreen from './features/syllabus/SyllabusScreen';
 import './styles/global.css';
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(() => localStorage.getItem('axa_user'));
-  const [activeView,   setActiveView]  = useState(VIEWS.OWN);
+  const [currentUser,   setCurrentUser]   = useState(() => localStorage.getItem('axa_user'));
+  const [activeView,    setActiveView]    = useState(VIEWS.OWN);
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
   const [syllabusOpen,  setSyllabusOpen]  = useState(false);
   const [soundOn,  setSoundOn]  = useState(() => isSoundEnabled());
@@ -24,15 +25,23 @@ export default function App() {
   const otherUser = currentUser === 'anurag' ? 'anshuman' : 'anurag';
   const { challenges, sendChallenge, updateChallengeStatus } = useChallenges(currentUser || 'anurag');
 
+  // Music — instantiated per user
+  const music = useMusic(currentUser || 'anurag');
+
   usePushNotifications(currentUser);
 
+  // Startup sequence: startup sound → then background music
   useEffect(() => {
     if (currentUser && !startupPlayed.current) {
       startupPlayed.current = true;
       preloadSounds();
       setTimeout(() => playStartup(), 400);
+      // Start background music after startup sound (~2s delay)
+      if (music.settings.enabled) {
+        setTimeout(() => music.startPlayback(), 2000);
+      }
     }
-  }, [currentUser]);
+  }, [currentUser]); // intentional — only fire once
 
   const toggleSound = useCallback((val) => {
     setSoundOn(val);
@@ -45,13 +54,8 @@ export default function App() {
   }, []);
 
   const handleMenuItem = useCallback((id) => {
-    if (id === 'logout') {
-      localStorage.removeItem('axa_user');
-      setCurrentUser(null);
-    }
-    if (id === 'syllabus') {
-      setSyllabusOpen(true);
-    }
+    if (id === 'logout')   { localStorage.removeItem('axa_user'); setCurrentUser(null); }
+    if (id === 'syllabus') { setSyllabusOpen(true); }
   }, []);
 
   const handleViewChange = useCallback((view) => {
@@ -59,9 +63,7 @@ export default function App() {
     setActiveView(view);
   }, []);
 
-  if (!currentUser) {
-    return <Onboarding onSelect={setCurrentUser} />;
-  }
+  if (!currentUser) return <Onboarding onSelect={setCurrentUser} />;
 
   const userTheme = USERS[currentUser];
 
@@ -80,6 +82,8 @@ export default function App() {
         input[type="datetime-local"]::-webkit-calendar-picker-indicator { filter: invert(0.5); }
         .skeleton { background: linear-gradient(90deg, ${userTheme.surfaceHigh} 25%, ${userTheme.border} 50%, ${userTheme.surfaceHigh} 75%); background-size: 200% 100%; }
         ::-webkit-scrollbar-thumb { background: ${userTheme.borderHigh}; }
+        @keyframes axa-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.6;transform:scale(0.85)} }
+        .axa-pulse { animation: axa-pulse 1.5s ease-in-out infinite; }
       `}</style>
 
       {quotesOn && <DailyQuote user={currentUser} />}
@@ -87,55 +91,37 @@ export default function App() {
       <Navbar user={currentUser} onHamburger={() => setSidePanelOpen(true)} />
 
       <div style={styles.viewContainer}>
-        {/* OWN workspace */}
         <div style={{
           ...styles.viewPane,
           transform: activeView === VIEWS.OWN ? 'translateX(0)' : 'translateX(-100%)',
           transition: 'transform 0.32s cubic-bezier(0.4,0,0.2,1)',
           zIndex: activeView === VIEWS.OWN ? 2 : 1,
         }}>
-          <Workspace
-            ownerUser={currentUser}
-            viewerUser={currentUser}
-            challenges={challenges}
-            onSendChallenge={sendChallenge}
-            onChallengeAction={updateChallengeStatus}
-          />
+          <Workspace ownerUser={currentUser} viewerUser={currentUser} challenges={challenges}
+            onSendChallenge={sendChallenge} onChallengeAction={updateChallengeStatus} />
         </div>
 
-        {/* OTHER workspace */}
         <div style={{
           ...styles.viewPane,
           transform: activeView === VIEWS.OTHER ? 'translateX(0)' : 'translateX(100%)',
           transition: 'transform 0.32s cubic-bezier(0.4,0,0.2,1)',
           zIndex: activeView === VIEWS.OTHER ? 2 : 1,
         }}>
-          <Workspace
-            ownerUser={otherUser}
-            viewerUser={currentUser}
-            challenges={challenges}
-            onSendChallenge={sendChallenge}
-            onChallengeAction={updateChallengeStatus}
-          />
+          <Workspace ownerUser={otherUser} viewerUser={currentUser} challenges={challenges}
+            onSendChallenge={sendChallenge} onChallengeAction={updateChallengeStatus} />
         </div>
 
-        {/* CHAT */}
         {activeView === VIEWS.CHAT && (
           <ChatScreen currentUser={currentUser} onClose={() => setActiveView(VIEWS.OWN)} />
         )}
 
-        {/* SYLLABUS — slides in over everything */}
         {syllabusOpen && (
           <SyllabusScreen user={currentUser} onClose={() => setSyllabusOpen(false)} />
         )}
       </div>
 
-      <BottomBar
-        currentUser={currentUser}
-        activeView={activeView}
-        onViewChange={handleViewChange}
-        unreadCount={0}
-      />
+      <BottomBar currentUser={currentUser} activeView={activeView}
+        onViewChange={handleViewChange} unreadCount={0} />
 
       <SidePanel
         open={sidePanelOpen}
@@ -146,13 +132,14 @@ export default function App() {
         onToggleSound={toggleSound}
         quotesOn={quotesOn}
         onToggleQuotes={toggleQuotes}
+        music={music}
       />
     </div>
   );
 }
 
 const styles = {
-  root: { position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+  root:          { position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' },
   viewContainer: { flex: 1, position: 'relative', overflow: 'hidden', display: 'flex' },
-  viewPane: { position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', willChange: 'transform' },
+  viewPane:      { position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', willChange: 'transform' },
 };
