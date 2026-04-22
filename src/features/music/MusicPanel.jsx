@@ -2,17 +2,12 @@ import React, { useState, useRef } from 'react';
 import { Icon } from '../../components/TaskCard';
 import { playClick } from '../../lib/sounds';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MusicPanel — renders inside SidePanel as a full sub-screen
-// Opens when user taps "Music" in the side panel
-// ─────────────────────────────────────────────────────────────────────────────
-
 export default function MusicPanel({ theme, music, onClose }) {
   const {
-    settings, allSongs, currentSong,
+    settings, allSongs, currentSong, isPlaying,
     toggleEnabled, setMode, selectSong,
+    pausePlayback, resumePlayback, startPlayback,
     addSong, deleteSong, renameSong,
-    startPlayback
   } = music;
 
   const [renamingId, setRenamingId] = useState(null);
@@ -32,17 +27,24 @@ export default function MusicPanel({ theme, music, onClose }) {
   const handleToggleEnabled = (val) => {
     playClick();
     toggleEnabled(val);
-    if (val) {
-      // Small delay so interaction has happened (required for autoplay)
-      setTimeout(() => startPlayback(), 100);
-    }
+    if (val) setTimeout(() => startPlayback(), 100);
   };
 
-  const handleSelectSong = (id) => {
+  // Per-song play/pause button logic:
+  // - If this song is NOT selected → select it and play
+  // - If this song IS selected AND is playing → pause
+  // - If this song IS selected AND is paused → resume
+  const handleSongPlayPause = (songId) => {
     playClick();
-    selectSong(id);
-    if (settings.enabled) {
-      setTimeout(() => startPlayback(), 100);
+    if (!settings.enabled) return;
+    const isThisSongSelected = songId === settings.currentSongId;
+    if (!isThisSongSelected) {
+      selectSong(songId);
+      setTimeout(() => startPlayback(), 60);
+    } else if (isPlaying) {
+      pausePlayback();
+    } else {
+      resumePlayback();
     }
   };
 
@@ -55,19 +57,29 @@ export default function MusicPanel({ theme, music, onClose }) {
           <Icon name="chevronDown" size={18} color={theme.textMuted} strokeWidth={2} />
         </button>
         <div style={{ ...S.headerTitle, color: theme.text }}>Music</div>
-        {/* Enable/disable toggle */}
         <TogglePill value={settings.enabled} onChange={handleToggleEnabled} theme={theme} />
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {/* Now playing */}
+
+        {/* Now playing bar */}
         {settings.enabled && currentSong && (
           <div style={{ ...S.nowPlaying, background: `${theme.primary}14`, borderBottom: `1px solid ${theme.border}` }}>
-            <div style={{ ...S.npDot, background: theme.primary }} className="axa-pulse" />
+            <div style={{ ...S.npDot, background: isPlaying ? theme.primary : theme.textMuted }}
+              className={isPlaying ? 'axa-pulse' : ''} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ ...S.npTitle, color: theme.text }}>{currentSong.title}</div>
-              <div style={{ ...S.npArtist, color: theme.textMuted }}>Now playing in background</div>
+              <div style={{ ...S.npArtist, color: theme.textMuted }}>
+                {isPlaying ? 'Playing in background' : 'Paused'}
+              </div>
             </div>
+            {/* Global pause/resume for current song */}
+            <button
+              style={{ ...S.npControl, color: theme.primary }}
+              onClick={() => { playClick(); isPlaying ? pausePlayback() : resumePlayback(); }}
+            >
+              <Icon name={isPlaying ? 'pause' : 'play'} size={18} color={theme.primary} strokeWidth={2} />
+            </button>
           </div>
         )}
 
@@ -101,20 +113,49 @@ export default function MusicPanel({ theme, music, onClose }) {
           <div style={{ ...S.sectionLabel, color: theme.textMuted }}>SONGS</div>
 
           {allSongs.map(song => {
-            const isSelected = song.id === settings.currentSongId;
+            const isSelected     = song.id === settings.currentSongId;
+            const isThisPlaying  = isSelected && isPlaying;
+
             return (
               <div key={song.id} style={{
                 ...S.songRow,
-                background: isSelected ? `${theme.primary}14` : 'transparent',
-                borderLeft: isSelected ? `2px solid ${theme.primary}` : '2px solid transparent',
+                background:  isSelected ? `${theme.primary}12` : 'transparent',
+                borderLeft:  isSelected ? `2px solid ${theme.primary}` : `2px solid transparent`,
+                opacity: settings.enabled ? 1 : 0.45,
               }}>
-                {/* Play indicator or select */}
-                <button style={S.songSelectBtn} onClick={() => handleSelectSong(song.id)}>
-                  <div style={{
-                    ...S.songDot,
-                    background: isSelected ? theme.primary : theme.borderHigh,
-                    boxShadow: isSelected ? `0 0 6px ${theme.glow}` : 'none',
-                  }} />
+
+                {/* ── Play / Pause button ── */}
+                <button
+                  style={{
+                    ...S.playBtn,
+                    background: isSelected ? `${theme.primary}22` : theme.surfaceHigh,
+                    border: `1px solid ${isSelected ? theme.primary : theme.border}`,
+                    opacity: settings.enabled ? 1 : 0.4,
+                    cursor: settings.enabled ? 'pointer' : 'default',
+                  }}
+                  onClick={() => settings.enabled && handleSongPlayPause(song.id)}
+                  title={isThisPlaying ? 'Pause' : 'Play'}
+                >
+                  {/* Animated bars when this song is actively playing */}
+                  {isThisPlaying ? (
+                    <span style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 14 }}>
+                      {[1, 2, 3].map(i => (
+                        <span key={i} style={{
+                          width: 3, borderRadius: 1,
+                          background: theme.primary,
+                          height: `${[60, 100, 75][i - 1]}%`,
+                          animation: `axa-bar${i} 0.7s ease-in-out infinite alternate`,
+                        }} />
+                      ))}
+                    </span>
+                  ) : (
+                    <Icon
+                      name="play"
+                      size={13}
+                      color={isSelected ? theme.primary : theme.textMuted}
+                      strokeWidth={2}
+                    />
+                  )}
                 </button>
 
                 {/* Song info */}
@@ -128,7 +169,7 @@ export default function MusicPanel({ theme, music, onClose }) {
                     onKeyDown={e => { if (e.key === 'Enter') { if (renameVal.trim()) renameSong(song.id, renameVal.trim()); setRenamingId(null); } }}
                   />
                 ) : (
-                  <div style={S.songInfo} onClick={() => handleSelectSong(song.id)}>
+                  <div style={S.songInfo} onClick={() => settings.enabled && handleSongPlayPause(song.id)}>
                     <div style={{ ...S.songTitle, color: isSelected ? theme.primary : theme.text }}>
                       {song.title}
                     </div>
@@ -138,7 +179,7 @@ export default function MusicPanel({ theme, music, onClose }) {
                   </div>
                 )}
 
-                {/* Actions — only for user songs */}
+                {/* Rename / delete — only for user songs */}
                 {!song.isDefault && renamingId !== song.id && (
                   <div style={S.songActions}>
                     <button style={S.songActionBtn} onClick={() => { setRenamingId(song.id); setRenameVal(song.title); }}>
@@ -153,14 +194,8 @@ export default function MusicPanel({ theme, music, onClose }) {
             );
           })}
 
-          {/* Add song button */}
-          <input
-            ref={fileRef}
-            type="file"
-            accept="audio/mp3,audio/mpeg,audio/*"
-            style={{ display: 'none' }}
-            onChange={handleFileUpload}
-          />
+          {/* Add song */}
+          <input ref={fileRef} type="file" accept="audio/mp3,audio/mpeg,audio/*" style={{ display: 'none' }} onChange={handleFileUpload} />
           <button
             style={{ ...S.addSongBtn, borderColor: theme.border, color: theme.textMuted }}
             onClick={() => { playClick(); fileRef.current?.click(); }}
@@ -184,8 +219,7 @@ function TogglePill({ value, onChange, theme }) {
         position: 'relative', width: 36, height: 20, border: 'none', cursor: 'pointer',
         borderRadius: 10, transition: 'background 0.2s',
         background: value ? theme.primary : 'rgba(255,255,255,0.12)',
-        flexShrink: 0,
-        display: 'flex', alignItems: 'center', padding: '0 3px',
+        flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 3px',
       }}
       onClick={() => onChange(!value)}
     >
@@ -199,27 +233,27 @@ function TogglePill({ value, onChange, theme }) {
 }
 
 const S = {
-  root:       { display: 'flex', flexDirection: 'column', height: '100%' },
-  header:     { display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px', height: 52, position: 'relative', flexShrink: 0 },
-  accentBar:  { position: 'absolute', top: 0, left: 0, right: 0, height: 2 },
-  backBtn:    { background: 'none', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', transform: 'rotate(90deg)' },
-  headerTitle:{ flex: 1, fontSize: 15, fontWeight: 700, fontFamily: 'Syne, sans-serif', letterSpacing: '-0.3px' },
-  nowPlaying: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px' },
-  npDot:      { width: 8, height: 8, borderRadius: '50%', flexShrink: 0, animation: 'pulse 1.5s ease-in-out infinite' },
-  npTitle:    { fontSize: 13, fontWeight: 700, fontFamily: 'Syne, sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  npArtist:   { fontSize: 10, fontFamily: 'Space Mono, monospace', marginTop: 1 },
-  section:    { padding: '12px 14px' },
-  sectionLabel: { fontSize: 9, fontFamily: 'Space Mono, monospace', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 },
-  modeRow:    { display: 'flex', gap: 8 },
-  modeBtn:    { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, padding: '8px 10px', border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 600, fontFamily: 'Syne, sans-serif', transition: 'all 0.15s' },
-  songRow:    { display: 'flex', alignItems: 'center', gap: 8, padding: '9px 0', transition: 'all 0.15s' },
-  songSelectBtn: { background: 'none', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', flexShrink: 0 },
-  songDot:    { width: 10, height: 10, borderRadius: '50%', transition: 'all 0.2s', flexShrink: 0 },
-  songInfo:   { flex: 1, minWidth: 0, cursor: 'pointer' },
-  songTitle:  { fontSize: 13, fontWeight: 600, fontFamily: 'DM Sans, sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color 0.15s' },
-  songArtist: { fontSize: 10, fontFamily: 'Space Mono, monospace', marginTop: 2 },
-  songActions:{ display: 'flex', gap: 2, flexShrink: 0 },
+  root:        { display: 'flex', flexDirection: 'column', height: '100%' },
+  header:      { display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px', height: 52, position: 'relative', flexShrink: 0 },
+  accentBar:   { position: 'absolute', top: 0, left: 0, right: 0, height: 2 },
+  backBtn:     { background: 'none', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', transform: 'rotate(90deg)' },
+  headerTitle: { flex: 1, fontSize: 15, fontWeight: 700, fontFamily: 'Syne, sans-serif', letterSpacing: '-0.3px' },
+  nowPlaying:  { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px' },
+  npDot:       { width: 8, height: 8, borderRadius: '50%', flexShrink: 0, transition: 'background 0.3s' },
+  npTitle:     { fontSize: 13, fontWeight: 700, fontFamily: 'Syne, sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  npArtist:    { fontSize: 10, fontFamily: 'Space Mono, monospace', marginTop: 1 },
+  npControl:   { background: 'none', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', flexShrink: 0 },
+  section:     { padding: '12px 14px' },
+  sectionLabel:{ fontSize: 9, fontFamily: 'Space Mono, monospace', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 },
+  modeRow:     { display: 'flex', gap: 8 },
+  modeBtn:     { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, padding: '8px 10px', border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 600, fontFamily: 'Syne, sans-serif', transition: 'all 0.15s' },
+  songRow:     { display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', transition: 'all 0.15s' },
+  playBtn:     { width: 30, height: 30, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all 0.15s', borderRadius: 4 },
+  songInfo:    { flex: 1, minWidth: 0, cursor: 'pointer' },
+  songTitle:   { fontSize: 13, fontWeight: 600, fontFamily: 'DM Sans, sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color 0.15s' },
+  songArtist:  { fontSize: 10, fontFamily: 'Space Mono, monospace', marginTop: 2 },
+  songActions: { display: 'flex', gap: 2, flexShrink: 0 },
   songActionBtn: { background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex', opacity: 0.65 },
-  renameInput:{ flex: 1, padding: '5px 8px', fontSize: 13, fontFamily: 'DM Sans, sans-serif', outline: 'none' },
-  addSongBtn: { display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 0', background: 'none', border: 'none', borderTop: '1px dashed', cursor: 'pointer', marginTop: 8, transition: 'opacity 0.15s' },
+  renameInput: { flex: 1, padding: '5px 8px', fontSize: 13, fontFamily: 'DM Sans, sans-serif', outline: 'none' },
+  addSongBtn:  { display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 0', background: 'none', border: 'none', borderTop: '1px dashed', cursor: 'pointer', marginTop: 8, transition: 'opacity 0.15s' },
 };

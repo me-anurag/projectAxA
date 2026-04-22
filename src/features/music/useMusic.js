@@ -1,26 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// MUSIC SYSTEM
-//
-// Default songs are built-in and cannot be deleted.
-// User songs are stored as base64 in localStorage (per user).
-//
-// Settings stored in localStorage: `axa_music_settings_${userId}`
-// User songs stored in: `axa_music_songs_${userId}`
-//
-// Settings shape:
-// {
-//   enabled: boolean,       // music on/off globally
-//   mode: 'loop'|'queue',   // loop one song, or play one after next
-//   currentSongId: string,  // which song is selected/playing
-// }
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Default songs — these are served from /sounds/ (bundled with app)
-// Cannot be deleted by users
 // export const DEFAULT_SONGS = [
-//   { id: 'default_tibetan', title: 'Tibetan Meditation', artist: 'Default', src: '/sounds/song_tibetan.mp3',  isDefault: true },
+//   { id: 'default_tibetan', title: 'Tibetan Meditation',  artist: 'Default', src: '/sounds/song_tibetan.mp3',  isDefault: true },
 //   { id: 'default_bandeya', title: 'Bandeya Rey Bandeya', artist: 'Default', src: '/sounds/song_bandeya.mp3', isDefault: true },
 //   { id: 'default_aagaaz',  title: 'Aagaaz',              artist: 'Default', src: '/sounds/song_aagaaz.mp3',  isDefault: true },
 // ];
@@ -45,14 +26,8 @@ const SONGS_KEY    = (u) => `axa_music_songs_${u}`;
 function loadSettings(userId) {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY(userId));
-    return raw ? JSON.parse(raw) : {
-      enabled: true,
-      mode: 'queue',
-      currentSongId: DEFAULT_SONGS[0].id,
-    };
-  } catch {
-    return { enabled: true, mode: 'queue', currentSongId: DEFAULT_SONGS[0].id };
-  }
+    return raw ? JSON.parse(raw) : { enabled: true, mode: 'queue', currentSongId: DEFAULT_SONGS[0].id };
+  } catch { return { enabled: true, mode: 'queue', currentSongId: DEFAULT_SONGS[0].id }; }
 }
 
 function saveSettings(userId, data) {
@@ -70,7 +45,6 @@ function saveUserSongs(userId, songs) {
   localStorage.setItem(SONGS_KEY(userId), JSON.stringify(songs));
 }
 
-// Convert a File to base64 data URL
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -81,18 +55,16 @@ function fileToBase64(file) {
 }
 
 export function useMusic(userId) {
-  const [settings,   setSettingsState] = useState(() => loadSettings(userId));
-  const [userSongs,  setUserSongs]     = useState(() => loadUserSongs(userId));
-  const audioRef   = useRef(null);
-  const isPlayingRef = useRef(false);
+  const [settings,    setSettingsState] = useState(() => loadSettings(userId));
+  const [userSongs,   setUserSongs]     = useState(() => loadUserSongs(userId));
+  // Reactive playing state — drives the play/pause button icons
+  const [isPlaying,   setIsPlaying]     = useState(false);
 
-  // All songs combined: defaults first, then user songs
-  const allSongs = [...DEFAULT_SONGS, ...userSongs];
+  const audioRef = useRef(null);
 
-  // Current song object
+  const allSongs    = [...DEFAULT_SONGS, ...userSongs];
   const currentSong = allSongs.find(s => s.id === settings.currentSongId) || allSongs[0];
 
-  // ── Persist settings ───────────────────────────────────────────────────────
   const updateSettings = useCallback((patch) => {
     setSettingsState(prev => {
       const next = { ...prev, ...patch };
@@ -101,8 +73,7 @@ export function useMusic(userId) {
     });
   }, [userId]);
 
-  // ── Audio engine ───────────────────────────────────────────────────────────
-  // Start playing the selected song after startup sound finishes (~1.5s delay)
+  // ── Core playback ──────────────────────────────────────────────────────────
   const startPlayback = useCallback(() => {
     if (!settings.enabled || !currentSong) return;
     try {
@@ -111,33 +82,28 @@ export function useMusic(userId) {
         audioRef.current.src = '';
       }
       const audio = new Audio(currentSong.src);
-      audio.volume = 0.35; // gentle background volume
+      audio.volume = 0.35;
       audioRef.current = audio;
-      isPlayingRef.current = true;
 
       audio.addEventListener('ended', () => {
-        if (!isPlayingRef.current) return;
         if (settings.mode === 'loop') {
           audio.currentTime = 0;
           audio.play().catch(() => {});
         } else {
-          // Queue mode: play next song
           const idx  = allSongs.findIndex(s => s.id === settings.currentSongId);
           const next = allSongs[(idx + 1) % allSongs.length];
-          if (next) {
-            updateSettings({ currentSongId: next.id });
-          }
+          if (next) updateSettings({ currentSongId: next.id });
         }
       });
 
-      audio.play().catch(() => {
-        // Autoplay blocked — ok, user will need to interact first
-      });
-    } catch (e) { /* silent */ }
+      audio.play()
+        .then(() => setIsPlaying(true))
+        .catch(() => setIsPlaying(false));
+    } catch { setIsPlaying(false); }
   }, [settings.enabled, settings.mode, settings.currentSongId, currentSong, allSongs, updateSettings]);
 
   const stopPlayback = useCallback(() => {
-    isPlayingRef.current = false;
+    setIsPlaying(false);
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = '';
@@ -145,17 +111,31 @@ export function useMusic(userId) {
     }
   }, []);
 
-  // When currentSongId changes in queue mode, restart playback with new song
-  useEffect(() => {
-    if (settings.enabled && isPlayingRef.current) {
+  // Pause without destroying the audio element
+  const pausePlayback = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    }
+  }, []);
+
+  // Resume from pause
+  const resumePlayback = useCallback(() => {
+    if (audioRef.current && settings.enabled) {
+      audioRef.current.play()
+        .then(() => setIsPlaying(true))
+        .catch(() => {});
+    } else if (settings.enabled) {
       startPlayback();
     }
-  }, [settings.currentSongId]); // intentional — only watch id change
+  }, [settings.enabled, startPlayback]);
 
-  // Cleanup on unmount
+  // When currentSongId changes, restart playback if currently playing
   useEffect(() => {
-    return () => { stopPlayback(); };
-  }, [stopPlayback]);
+    if (isPlaying) startPlayback();
+  }, [settings.currentSongId]); // intentional — only react to song change
+
+  useEffect(() => { return () => { stopPlayback(); }; }, [stopPlayback]);
 
   // ── Controls ───────────────────────────────────────────────────────────────
   const toggleEnabled = useCallback((val) => {
@@ -163,9 +143,7 @@ export function useMusic(userId) {
     if (!val) stopPlayback();
   }, [updateSettings, stopPlayback]);
 
-  const setMode = useCallback((mode) => {
-    updateSettings({ mode });
-  }, [updateSettings]);
+  const setMode = useCallback((mode) => { updateSettings({ mode }); }, [updateSettings]);
 
   const selectSong = useCallback((songId) => {
     updateSettings({ currentSongId: songId });
@@ -173,73 +151,40 @@ export function useMusic(userId) {
 
   const playNext = useCallback(() => {
     const idx  = allSongs.findIndex(s => s.id === settings.currentSongId);
-    const next = allSongs[(idx + 1) % allSongs.length];
-    if (next) selectSong(next.id);
+    selectSong(allSongs[(idx + 1) % allSongs.length]?.id);
   }, [allSongs, settings.currentSongId, selectSong]);
 
   const playPrev = useCallback(() => {
     const idx  = allSongs.findIndex(s => s.id === settings.currentSongId);
-    const prev = allSongs[(idx - 1 + allSongs.length) % allSongs.length];
-    if (prev) selectSong(prev.id);
+    selectSong(allSongs[(idx - 1 + allSongs.length) % allSongs.length]?.id);
   }, [allSongs, settings.currentSongId, selectSong]);
 
-  // ── User song management ───────────────────────────────────────────────────
+  // ── Song management ────────────────────────────────────────────────────────
   const addSong = useCallback(async (file) => {
     try {
       const base64 = await fileToBase64(file);
-      const name   = file.name.replace(/\.[^.]+$/, ''); // strip extension
       const song = {
-        id:        `user_${Date.now()}`,
-        title:     name,
-        artist:    'My Library',
-        src:       base64,
-        isDefault: false,
+        id: `user_${Date.now()}`, title: file.name.replace(/\.[^.]+$/, ''),
+        artist: 'My Library', src: base64, isDefault: false,
       };
-      setUserSongs(prev => {
-        const next = [...prev, song];
-        saveUserSongs(userId, next);
-        return next;
-      });
+      setUserSongs(prev => { const next = [...prev, song]; saveUserSongs(userId, next); return next; });
       return song;
-    } catch (e) {
-      console.error('[AxA] addSong error:', e);
-    }
+    } catch (e) { console.error('[AxA] addSong:', e); }
   }, [userId]);
 
   const deleteSong = useCallback((songId) => {
-    setUserSongs(prev => {
-      const next = prev.filter(s => s.id !== songId);
-      saveUserSongs(userId, next);
-      return next;
-    });
-    // If deleted song was playing, switch to first song
-    if (settings.currentSongId === songId) {
-      updateSettings({ currentSongId: DEFAULT_SONGS[0].id });
-    }
+    setUserSongs(prev => { const next = prev.filter(s => s.id !== songId); saveUserSongs(userId, next); return next; });
+    if (settings.currentSongId === songId) updateSettings({ currentSongId: DEFAULT_SONGS[0].id });
   }, [userId, settings.currentSongId, updateSettings]);
 
   const renameSong = useCallback((songId, title) => {
-    setUserSongs(prev => {
-      const next = prev.map(s => s.id === songId ? { ...s, title } : s);
-      saveUserSongs(userId, next);
-      return next;
-    });
+    setUserSongs(prev => { const next = prev.map(s => s.id === songId ? { ...s, title } : s); saveUserSongs(userId, next); return next; });
   }, [userId]);
 
   return {
-    settings,
-    allSongs,
-    currentSong,
-    audioRef,
-    startPlayback,
-    stopPlayback,
-    toggleEnabled,
-    setMode,
-    selectSong,
-    playNext,
-    playPrev,
-    addSong,
-    deleteSong,
-    renameSong,
+    settings, allSongs, currentSong, isPlaying,
+    audioRef, startPlayback, stopPlayback, pausePlayback, resumePlayback,
+    toggleEnabled, setMode, selectSong, playNext, playPrev,
+    addSong, deleteSong, renameSong,
   };
 }
