@@ -451,3 +451,54 @@ export function usePushNotifications(currentUser) {
     return () => supabase.removeChannel(sub);
   }, [currentUser, sendPush]);
 }
+
+
+// ─── SAVE PUSH SUBSCRIPTION ───────────────────────────────────────────────────
+// Called once when user grants notification permission.
+// Saves the device's Web Push subscription to Supabase so the Edge Function
+// can push to this device even when the app is closed.
+export async function savePushSubscription(userId, vapidPublicKey) {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  if (Notification.permission !== 'granted') return;
+
+  try {
+    const reg = await navigator.serviceWorker.ready;
+
+    // Check for existing subscription first
+    let sub = await reg.pushManager.getSubscription();
+
+    // If no existing subscription, create one
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly:      true,
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+      });
+    }
+
+    const json   = sub.toJSON();
+    const p256dh = json.keys?.p256dh;
+    const auth   = json.keys?.auth;
+
+    if (!p256dh || !auth) return;
+
+    // Upsert — if this endpoint already exists for this user, update it
+    await supabase.from('push_subscriptions').upsert(
+      { user_id: userId, endpoint: sub.endpoint, p256dh, auth },
+      { onConflict: 'endpoint' }
+    );
+
+    console.log('[AXA] Push subscription saved for', userId);
+  } catch (err) {
+    console.warn('[AXA] Push subscription failed:', err);
+  }
+}
+
+// Utility: convert VAPID public key from base64url to Uint8Array
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw     = window.atob(base64);
+  const output  = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; ++i) output[i] = raw.charCodeAt(i);
+  return output;
+}

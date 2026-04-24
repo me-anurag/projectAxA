@@ -32,6 +32,10 @@ function registerValidSW(swUrl, config) {
         registration.update();
       }, 60 * 1000);
 
+      // Import the push event handler script into the SW scope
+      // (CRA's generated SW doesn't handle push events natively)
+      registration.active?.postMessage({ type: 'IMPORT_PUSH_HANDLER' });
+
       registration.onupdatefound = () => {
         const installingWorker = registration.installing;
         if (!installingWorker) return;

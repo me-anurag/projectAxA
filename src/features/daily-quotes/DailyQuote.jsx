@@ -66,6 +66,25 @@ function cacheQuote(quote, author) {
   }));
 }
 
+// ── Fire OS notification for the quote ────────────────────────────────────────
+function fireQuoteNotification(quote, userTheme) {
+  if (Notification.permission !== 'granted') return;
+  const title = `${userTheme.emoji} Good Morning, ${userTheme.displayName}`;
+  const body  = `"${quote.quote}" — ${quote.author}`;
+  const icon  = '/icons/icon-192.jpg';
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.ready
+      .then(reg => reg.showNotification(title, {
+        body, icon, badge: icon,
+        vibrate: [120, 60, 120],
+        tag: 'axa-daily-quote',
+        renotify: false, // don't spam if already shown
+        data: { url: '/' },
+      }))
+      .catch(() => {});
+  }
+}
+
 // ── DailyQuote Component ──────────────────────────────────────────────────────
 export default function DailyQuote({ user }) {
   const theme = USERS[user];
@@ -94,6 +113,8 @@ export default function DailyQuote({ user }) {
         cacheQuote(q.quote, q.author);
         setQuote(q);
         setLoading(false);
+        // Also fire OS notification (reaches lock screen / notification shade)
+        fireQuoteNotification(q, USERS[user]);
       });
     }
   }, [user]);

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { USERS, VIEWS } from './lib/theme';
-import { useChallenges, usePushNotifications } from './hooks/useData';
+import { useChallenges, usePushNotifications, savePushSubscription } from './hooks/useData';
 import { playStartup, playClick, isSoundEnabled, setSoundEnabled, preloadSounds } from './lib/sounds';
 import { useMusic } from './features/music/useMusic';
 import Onboarding from './pages/Onboarding';
@@ -12,6 +12,11 @@ import ChatScreen from './components/ChatScreen';
 import DailyQuote from './features/daily-quotes/DailyQuote';
 import SyllabusScreen from './features/syllabus/SyllabusScreen';
 import './styles/global.css';
+
+// VAPID public key — paste your public key here after running:
+// npx web-push generate-vapid-keys
+// Then add private key to Supabase secrets (never in frontend code)
+const VAPID_PUBLIC_KEY = process.env.REACT_APP_VAPID_PUBLIC_KEY || '';
 
 export default function App() {
   const [currentUser,   setCurrentUser]   = useState(() => localStorage.getItem('axa_user'));
@@ -36,6 +41,14 @@ export default function App() {
       startupPlayed.current = true;
       preloadSounds();
       setTimeout(() => playStartup(), 400);
+      // Save push subscription so Edge Function can push when app is closed
+      if ('Notification' in window) {
+        Notification.requestPermission().then(permission => {
+          if (permission === 'granted' && VAPID_PUBLIC_KEY) {
+            savePushSubscription(currentUser, VAPID_PUBLIC_KEY);
+          }
+        });
+      }
       // Start background music after startup sound (~2s delay)
       if (music.settings.enabled) {
         setTimeout(() => music.startPlayback(), 2000);
@@ -84,6 +97,9 @@ export default function App() {
         ::-webkit-scrollbar-thumb { background: ${userTheme.borderHigh}; }
         @keyframes axa-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.6;transform:scale(0.85)} }
         .axa-pulse { animation: axa-pulse 1.5s ease-in-out infinite; }
+        @keyframes axa-bar1 { from{height:30%} to{height:90%} }
+        @keyframes axa-bar2 { from{height:60%} to{height:100%} }
+        @keyframes axa-bar3 { from{height:40%} to{height:70%} }
       `}</style>
 
       {quotesOn && <DailyQuote user={currentUser} />}
