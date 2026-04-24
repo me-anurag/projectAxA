@@ -41,9 +41,9 @@ select cron.schedule(
   '30 0 * * *',
   $$
   select net.http_post(
-    url    := 'https://YOUR_PROJECT_REF.supabase.co/functions/v1/axa-scheduled-push',
+    url    := 'https://vfcnrsapoxlclktpmlwd.supabase.co/functions/v1/axa-scheduled-push',
     body   := '{"type":"daily_quote"}'::jsonb,
-    headers := '{"Authorization":"Bearer YOUR_SERVICE_ROLE_KEY","Content-Type":"application/json"}'::jsonb
+    headers := '{"Authorization":"Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZmY25yc2Fwb3hsY2xrdHBtbHdkIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjUzMzIwOSwiZXhwIjoyMDkyMTA5MjA5fQ.PiaO8GV0oUD6driDdIsTq5mmjm2lDkim3v6xhzQedtA","Content-Type":"application/json"}'::jsonb
   )
   $$
 );
@@ -54,9 +54,9 @@ select cron.schedule(
   '30 4 * * *',
   $$
   select net.http_post(
-    url    := 'https://YOUR_PROJECT_REF.supabase.co/functions/v1/axa-scheduled-push',
+    url    := 'https://vfcnrsapoxlclktpmlwd.supabase.co/functions/v1/axa-scheduled-push',
     body   := '{"type":"mission_nudge"}'::jsonb,
-    headers := '{"Authorization":"Bearer YOUR_SERVICE_ROLE_KEY","Content-Type":"application/json"}'::jsonb
+    headers := '{"Authorization":"Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZmY25yc2Fwb3hsY2xrdHBtbHdkIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjUzMzIwOSwiZXhwIjoyMDkyMTA5MjA5fQ.PiaO8GV0oUD6driDdIsTq5mmjm2lDkim3v6xhzQedtA","Content-Type":"application/json"}'::jsonb
   )
   $$
 );
