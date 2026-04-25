@@ -4,28 +4,12 @@
 //   1. New message   → triggered by Database Webhook on messages INSERT
 //   2. New challenge → triggered by Database Webhook on challenges INSERT
 //   3. Ping test     → triggered manually from app
-//
-// Secrets needed in Supabase Dashboard → Settings → Edge Function Secrets:
-//   VAPID_PUBLIC_KEY      from: npx web-push generate-vapid-keys
-//   VAPID_PRIVATE_KEY     from: npx web-push generate-vapid-keys
-//   VAPID_SUBJECT         e.g.  mailto:anurag@example.com
-//   WEBHOOK_SECRET        any random string you choose (e.g. "axa_webhook_2026")
-//   SUPABASE_URL          auto-injected
-//   SUPABASE_SERVICE_ROLE_KEY  auto-injected
-//
-// HOW WEB PUSH WORKS (so you understand what's happening):
-//   Your app subscribes to the browser's push service (FCM for Android Chrome,
-//   APNs for iOS Safari). The subscription has an endpoint URL + encryption keys.
-//   We store that in the push_subscriptions table.
-//   When this function runs, it sends an encrypted HTTP POST to that endpoint.
-//   The browser's push service (Google/Apple) delivers it to the phone OS.
-//   The OS wakes up the service worker and shows the notification.
-//   This works even when the app and phone are completely off/asleep.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import webpush from 'https://esm.sh/web-push@3.6.7?deno-std=0.177.0';
 
-// ── Supabase client (service role — can read all rows) ────────────────────────
+// ── Supabase client ───────────────────────────────────────────────────────────
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
@@ -37,14 +21,24 @@ const VAPID_PRIVATE_KEY = Deno.env.get('VAPID_PRIVATE_KEY') ?? '';
 const VAPID_SUBJECT     = Deno.env.get('VAPID_SUBJECT')     ?? 'mailto:axa@example.com';
 const WEBHOOK_SECRET    = Deno.env.get('WEBHOOK_SECRET')    ?? '';
 
+// ── CORS headers — required so browser preflight (OPTIONS) doesn't get 405 ───
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-webhook-secret',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
+// ── Helper: JSON response with CORS ──────────────────────────────────────────
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...corsHeaders },
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // WEB PUSH SENDER
-// Uses the web-push npm package via esm.sh — handles all the VAPID signing
-// and AES-GCM payload encryption that Web Push requires.
 // ─────────────────────────────────────────────────────────────────────────────
-// Note: We use the webpush-webcrypto package which works in Deno's WebCrypto env
-import webpush from 'https://esm.sh/web-push@3.6.7?deno-std=0.177.0';
-
 function initWebPush() {
   webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 }
@@ -55,7 +49,6 @@ async function sendPushToUser(
   body: string,
   icon = '/icons/icon-192.jpg'
 ): Promise<{ sent: boolean; reason?: string }> {
-  // Get this user's push subscription from DB
   const { data, error } = await supabase
     .from('push_subscriptions')
     .select('endpoint, p256dh, auth')
@@ -75,14 +68,12 @@ async function sendPushToUser(
 
   try {
     await webpush.sendNotification(subscription, payload, {
-      TTL: 86400, // keep trying for 24h if device is offline
+      TTL: 86400,
       urgency: 'high',
     });
     return { sent: true };
   } catch (e: any) {
-    // 410 Gone = subscription expired/user revoked permission
     if (e?.statusCode === 410 || e?.statusCode === 404) {
-      // Clean up dead subscription
       await supabase.from('push_subscriptions').delete().eq('user_id', userId);
     }
     return { sent: false, reason: e?.message ?? 'unknown error' };
@@ -93,33 +84,38 @@ async function sendPushToUser(
 // MAIN HANDLER
 // ─────────────────────────────────────────────────────────────────────────────
 Deno.serve(async (req: Request) => {
-  // Only allow POST
-  if (req.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 });
+  // ── CORS preflight — browsers send this before every cross-origin POST ──────
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
   }
 
-  // Verify webhook secret header (security — prevents random internet calls)
+  // ── Only allow POST beyond this point ────────────────────────────────────────
+  if (req.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405, headers: corsHeaders });
+  }
+
+  // ── Verify webhook secret ────────────────────────────────────────────────────
   const secret = req.headers.get('x-webhook-secret');
   if (WEBHOOK_SECRET && secret !== WEBHOOK_SECRET) {
-    return new Response('Unauthorized', { status: 401 });
+    return new Response('Unauthorized', { status: 401, headers: corsHeaders });
   }
 
   let body: any;
   try {
     body = await req.json();
   } catch {
-    return new Response('Bad JSON', { status: 400 });
+    return jsonResponse({ ok: false, reason: 'Bad JSON' }, 400);
   }
 
   initWebPush();
 
-  const type   = body.type as string;   // 'message' | 'challenge' | 'ping'
-  const record = body.record;            // the new DB row (from webhook)
-  const userId = body.user_id as string; // for ping: who to notify
+  const type   = body.type   as string;
+  const record = body.record;
+  const userId = body.user_id as string;
 
   const results: any[] = [];
 
-  // ── 1. New message ──────────────────────────────────────────────────────────
+  // ── 1. New message ───────────────────────────────────────────────────────────
   if (type === 'message' && record) {
     const sender   = record.sender;
     const receiver = sender === 'anurag' ? 'anshuman' : 'anurag';
@@ -130,7 +126,7 @@ Deno.serve(async (req: Request) => {
     results.push({ type: 'message', receiver, ...result });
   }
 
-  // ── 2. New challenge ────────────────────────────────────────────────────────
+  // ── 2. New challenge ─────────────────────────────────────────────────────────
   else if (type === 'challenge' && record) {
     const from     = record.from_user === 'anurag' ? 'Anurag ⚡' : 'Anshuman 🔥';
     const receiver = record.to_user;
@@ -143,7 +139,7 @@ Deno.serve(async (req: Request) => {
     results.push({ type: 'challenge', receiver, ...result });
   }
 
-  // ── 3. Ping test ────────────────────────────────────────────────────────────
+  // ── 3. Ping test ─────────────────────────────────────────────────────────────
   else if (type === 'ping' && userId) {
     const displayName = userId === 'anurag' ? 'Anurag' : 'Anshuman';
     const emoji       = userId === 'anurag' ? '⚡' : '🔥';
@@ -157,14 +153,9 @@ Deno.serve(async (req: Request) => {
   }
 
   else {
-    return new Response(JSON.stringify({ ok: false, reason: 'Unknown type or missing record' }), {
-      status: 400,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return jsonResponse({ ok: false, reason: 'Unknown type or missing record' }, 400);
   }
 
   console.log('[AxA push]', JSON.stringify(results));
-  return new Response(JSON.stringify({ ok: true, results }), {
-    headers: { 'Content-Type': 'application/json' },
-  });
+  return jsonResponse({ ok: true, results });
 });
