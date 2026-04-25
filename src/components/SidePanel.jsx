@@ -72,6 +72,10 @@ export default function SidePanel({
 
               <SectionLabel label="SETTINGS" theme={theme} />
 
+              {/* Ping — test notification pipeline */}
+              <MenuItem icon="bell" label="Test Notification (Ping)" theme={theme}
+                onClick={() => { playClick(); onMenuItem('ping'); handleClose(); }} />
+
               {/* Sound toggle */}
               <ToggleItem
                 icon={soundOn ? 'volume' : 'volumeOff'}

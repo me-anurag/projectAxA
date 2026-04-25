@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { USERS, VIEWS } from './lib/theme';
-import { useChallenges, usePushNotifications, savePushSubscription } from './hooks/useData';
+import { useChallenges, usePushNotifications, requestNotificationPermission, sendOSNotification } from './hooks/useData';
 import { playStartup, playClick, isSoundEnabled, setSoundEnabled, preloadSounds } from './lib/sounds';
 import { useMusic } from './features/music/useMusic';
 import Onboarding from './pages/Onboarding';
@@ -13,11 +13,6 @@ import DailyQuote from './features/daily-quotes/DailyQuote';
 import SyllabusScreen from './features/syllabus/SyllabusScreen';
 import './styles/global.css';
 
-// VAPID public key — paste your public key here after running:
-// npx web-push generate-vapid-keys
-// Then add private key to Supabase secrets (never in frontend code)
-const VAPID_PUBLIC_KEY = process.env.REACT_APP_VAPID_PUBLIC_KEY || '';
-
 export default function App() {
   const [currentUser,   setCurrentUser]   = useState(() => localStorage.getItem('axa_user'));
   const [activeView,    setActiveView]    = useState(VIEWS.OWN);
@@ -25,56 +20,58 @@ export default function App() {
   const [syllabusOpen,  setSyllabusOpen]  = useState(false);
   const [soundOn,  setSoundOn]  = useState(() => isSoundEnabled());
   const [quotesOn, setQuotesOn] = useState(() => localStorage.getItem('axa_quotes') !== 'false');
+  // In-app toast state
+  const [toast, setToast] = useState(null); // { title, body }
+  const toastTimerRef = useRef(null);
   const startupPlayed = useRef(false);
 
   const otherUser = currentUser === 'anurag' ? 'anshuman' : 'anurag';
   const { challenges, sendChallenge, updateChallengeStatus } = useChallenges(currentUser || 'anurag');
-
-  // Music — instantiated per user
   const music = useMusic(currentUser || 'anurag');
 
-  usePushNotifications(currentUser);
+  // Show in-app toast — auto-dismisses after 4 seconds
+  const showToast = useCallback(({ title, body }) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ title, body });
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+  }, []);
 
-  // Startup sequence: startup sound → then background music
+  // Wire notifications — passes showToast so it shows banner when app is focused
+  usePushNotifications(currentUser, showToast);
+
   useEffect(() => {
     if (currentUser && !startupPlayed.current) {
       startupPlayed.current = true;
       preloadSounds();
+      requestNotificationPermission();
       setTimeout(() => playStartup(), 400);
-      // Save push subscription so Edge Function can push when app is closed
-      if ('Notification' in window) {
-        Notification.requestPermission().then(permission => {
-          if (permission === 'granted' && VAPID_PUBLIC_KEY) {
-            savePushSubscription(currentUser, VAPID_PUBLIC_KEY);
-          }
-        });
-      }
-      // Start background music after startup sound (~2s delay)
       if (music.settings.enabled) {
         setTimeout(() => music.startPlayback(), 2000);
       }
     }
-  }, [currentUser]); // intentional — only fire once
+  }, [currentUser]); // intentional
 
-  const toggleSound = useCallback((val) => {
-    setSoundOn(val);
-    setSoundEnabled(val);
-  }, []);
-
-  const toggleQuotes = useCallback((val) => {
-    setQuotesOn(val);
-    localStorage.setItem('axa_quotes', String(val));
-  }, []);
+  const toggleSound = useCallback((val) => { setSoundOn(val); setSoundEnabled(val); }, []);
+  const toggleQuotes = useCallback((val) => { setQuotesOn(val); localStorage.setItem('axa_quotes', String(val)); }, []);
 
   const handleMenuItem = useCallback((id) => {
     if (id === 'logout')   { localStorage.removeItem('axa_user'); setCurrentUser(null); }
     if (id === 'syllabus') { setSyllabusOpen(true); }
-  }, []);
+    if (id === 'ping')     { handlePing(); }
+  }, []); // handlePing defined below, stable ref ok
 
-  const handleViewChange = useCallback((view) => {
-    playClick();
-    setActiveView(view);
-  }, []);
+  // Ping — tests the full notification pipeline end to end
+  const handlePing = useCallback(() => {
+    const theme = USERS[currentUser];
+    const title = `🔔 Ping — ${theme?.displayName || 'Test'}`;
+    const body  = 'Notifications are working! AxA is live.';
+    // Show in-app toast immediately (tests foreground path)
+    showToast({ title, body });
+    // Also fire OS notification (tests background path)
+    sendOSNotification(title, body);
+  }, [currentUser, showToast]);
+
+  const handleViewChange = useCallback((view) => { playClick(); setActiveView(view); }, []);
 
   if (!currentUser) return <Onboarding onSelect={setCurrentUser} />;
 
@@ -93,16 +90,50 @@ export default function App() {
         body { background: ${userTheme.bg}; }
         input::placeholder, textarea::placeholder { color: ${userTheme.textMuted}; }
         input[type="datetime-local"]::-webkit-calendar-picker-indicator { filter: invert(0.5); }
-        .skeleton { background: linear-gradient(90deg, ${userTheme.surfaceHigh} 25%, ${userTheme.border} 50%, ${userTheme.surfaceHigh} 75%); background-size: 200% 100%; }
         ::-webkit-scrollbar-thumb { background: ${userTheme.borderHigh}; }
         @keyframes axa-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.6;transform:scale(0.85)} }
         .axa-pulse { animation: axa-pulse 1.5s ease-in-out infinite; }
         @keyframes axa-bar1 { from{height:30%} to{height:90%} }
         @keyframes axa-bar2 { from{height:60%} to{height:100%} }
         @keyframes axa-bar3 { from{height:40%} to{height:70%} }
+        @keyframes axa-toast-in { from{transform:translateY(-80px);opacity:0} to{transform:translateY(0);opacity:1} }
+        @keyframes axa-toast-out { from{opacity:1} to{opacity:0} }
       `}</style>
 
       {quotesOn && <DailyQuote user={currentUser} />}
+
+      {/* ── In-app toast notification banner ── */}
+      {toast && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 999,
+          padding: '12px 16px',
+          background: userTheme.surface,
+          borderBottom: `1px solid ${userTheme.border}`,
+          display: 'flex', alignItems: 'center', gap: 12,
+          animation: 'axa-toast-in 0.3s cubic-bezier(0.34,1.56,0.64,1) forwards',
+          boxShadow: `0 4px 24px rgba(0,0,0,0.5)`,
+          paddingTop: 'max(12px, env(safe-area-inset-top, 12px))',
+        }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+            background: userTheme.btnGradient,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 16,
+          }}>🔔</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, fontFamily: 'Syne, sans-serif', color: userTheme.text, letterSpacing: '-0.2px' }}>
+              {toast.title}
+            </div>
+            <div style={{ fontSize: 12, fontFamily: 'DM Sans, sans-serif', color: userTheme.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
+              {toast.body}
+            </div>
+          </div>
+          <button
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 6, color: userTheme.textMuted, fontSize: 16, flexShrink: 0 }}
+            onClick={() => setToast(null)}
+          >✕</button>
+        </div>
+      )}
 
       <Navbar user={currentUser} onHamburger={() => setSidePanelOpen(true)} />
 

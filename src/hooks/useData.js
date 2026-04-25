@@ -4,6 +4,14 @@ import { TASK_STATUS } from '../lib/theme';
 import { celebrate } from '../lib/celebrate';
 import { playSuccess, playMissed, playCheckbox, playNotification } from '../lib/sounds';
 
+// ── Helper: convert VAPID public key from base64url to Uint8Array ────────────
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw     = atob(base64);
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ARCHITECTURE: Short polling (primary) + Realtime WebSocket (bonus)
 //
@@ -386,119 +394,109 @@ export function useMessages() {
 
 
 // ─── PUSH NOTIFICATIONS ───────────────────────────────────────────────────────
-export function usePushNotifications(currentUser) {
-  const lastMsgId    = useRef(null);
-  const lastChallIds = useRef(new Set());
+//
+// HOW NOTIFICATIONS WORK IN THIS APP:
+//
+// There are TWO layers of notification:
+// 1. OS notification (service worker showNotification) — works when app is
+//    BACKGROUNDED or phone screen is off. Blocked by browsers when app is focused.
+// 2. In-app toast banner — shown when app IS focused (user is looking at it).
+//    This is handled in App.jsx via the onToast callback.
+//
+// Detection: We reuse the EXISTING polling channels (messages_rt, challenges_rt).
+// No separate push channels needed — that was causing conflicts.
+// New messages/challenges are detected by comparing IDs on each poll/realtime event.
+//
+// ─────────────────────────────────────────────────────────────────────────────
 
+// Raw sendPush — fires OS notification. Works when app is backgrounded.
+// When app is focused, browser blocks this silently — App.jsx shows toast instead.
+export function sendOSNotification(title, body) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const icon = '/icons/icon-192.jpg';
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.ready
+      .then(reg => reg.showNotification(title, {
+        body,
+        icon,
+        badge: icon,
+        vibrate: [200, 100, 200],
+        tag: `axa-${Date.now()}`, // unique tag = always shows, no dedup
+        data: { url: window.location.href },
+      }))
+      .catch(() => {
+        try { new window.Notification(title, { body, icon }); } catch (_) {}
+      });
+  } else {
+    try { new window.Notification(title, { body, icon }); } catch (_) {}
+  }
+}
+
+// Request permission once — call this early in App lifecycle
+export function requestNotificationPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+}
+
+export function usePushNotifications(currentUser, onToast) {
+  const lastMsgIdRef    = useRef(null);
+  const lastChallIdsRef = useRef(new Set());
+
+  // Request permission on mount
   useEffect(() => {
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
+    requestNotificationPermission();
   }, []);
 
-  const sendPush = useCallback((title, body) => {
-    if (Notification.permission !== 'granted') return;
+  // The notification trigger function — tries OS notification first,
+  // falls back to in-app toast (passed from App.jsx)
+  const notify = useCallback((title, body) => {
     playNotification();
-    const icon = '/icons/icon-192.jpg';
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.ready
-        .then(reg => reg.showNotification(title, {
-          body, icon, badge: icon,
-          vibrate: [150, 80, 150],
-          tag: 'axa-notif',
-          renotify: true,
-          data: { url: window.location.href },
-        }))
-        .catch(() => { try { new Notification(title, { body, icon }); } catch (_) {} });
-    } else {
-      try { new Notification(title, { body, icon }); } catch (_) {}
-    }
-  }, []);
+    // Always try OS notification — works when backgrounded
+    sendOSNotification(title, body);
+    // Also show in-app toast (for when app is focused)
+    onToast?.({ title, body });
+  }, [onToast]);
 
+  // ── Detect new MESSAGES via existing messages_rt channel events ───────────
+  // We hook into the same realtime INSERT event as useMessages,
+  // but in a SEPARATE channel so there's no conflict.
   useEffect(() => {
     if (!currentUser) return;
-    const sub = supabase
-      .channel(`push_msg_${currentUser}`)
+    const ch = supabase
+      .channel(`notif_msg_${currentUser}`)
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
           const msg = payload.new;
-          if (msg.sender !== currentUser && msg.id !== lastMsgId.current) {
-            lastMsgId.current = msg.id;
-            const from = msg.sender === 'anurag' ? 'Anurag ⚡' : 'Anshuman 🔥';
-            sendPush(from, msg.body ? msg.body.slice(0, 80) : 'Sent an image');
-          }
+          // Only notify for OTHER user's messages, and only once per message
+          if (msg.sender === currentUser) return;
+          if (lastMsgIdRef.current === msg.id) return;
+          lastMsgIdRef.current = msg.id;
+          const from = msg.sender === 'anurag' ? 'Anurag ⚡' : 'Anshuman 🔥';
+          const preview = msg.body ? msg.body.slice(0, 80) : '📷 Sent an image';
+          notify(from, preview);
         })
       .subscribe();
-    return () => supabase.removeChannel(sub);
-  }, [currentUser, sendPush]);
+    return () => supabase.removeChannel(ch);
+  }, [currentUser, notify]);
 
+  // ── Detect new CHALLENGES ─────────────────────────────────────────────────
   useEffect(() => {
     if (!currentUser) return;
-    const sub = supabase
-      .channel(`push_chall_${currentUser}`)
+    const ch = supabase
+      .channel(`notif_chall_${currentUser}`)
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'challenges' },
         (payload) => {
           const c = payload.new;
-          if (c.to_user === currentUser && !lastChallIds.current.has(c.id)) {
-            lastChallIds.current.add(c.id);
-            const from = c.from_user === 'anurag' ? 'Anurag ⚡' : 'Anshuman 🔥';
-            sendPush(`⚔️ Challenge from ${from}`, c.title);
-          }
+          if (c.to_user !== currentUser) return;
+          if (lastChallIdsRef.current.has(c.id)) return;
+          lastChallIdsRef.current.add(c.id);
+          const from = c.from_user === 'anurag' ? 'Anurag ⚡' : 'Anshuman 🔥';
+          notify(`⚔️ Challenge from ${from}`, c.title);
         })
       .subscribe();
-    return () => supabase.removeChannel(sub);
-  }, [currentUser, sendPush]);
-}
-
-
-// ─── SAVE PUSH SUBSCRIPTION ───────────────────────────────────────────────────
-// Called once when user grants notification permission.
-// Saves the device's Web Push subscription to Supabase so the Edge Function
-// can push to this device even when the app is closed.
-export async function savePushSubscription(userId, vapidPublicKey) {
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
-  if (Notification.permission !== 'granted') return;
-
-  try {
-    const reg = await navigator.serviceWorker.ready;
-
-    // Check for existing subscription first
-    let sub = await reg.pushManager.getSubscription();
-
-    // If no existing subscription, create one
-    if (!sub) {
-      sub = await reg.pushManager.subscribe({
-        userVisibleOnly:      true,
-        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-      });
-    }
-
-    const json   = sub.toJSON();
-    const p256dh = json.keys?.p256dh;
-    const auth   = json.keys?.auth;
-
-    if (!p256dh || !auth) return;
-
-    // Upsert — if this endpoint already exists for this user, update it
-    await supabase.from('push_subscriptions').upsert(
-      { user_id: userId, endpoint: sub.endpoint, p256dh, auth },
-      { onConflict: 'endpoint' }
-    );
-
-    console.log('[AXA] Push subscription saved for', userId);
-  } catch (err) {
-    console.warn('[AXA] Push subscription failed:', err);
-  }
-}
-
-// Utility: convert VAPID public key from base64url to Uint8Array
-function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const raw     = window.atob(base64);
-  const output  = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; ++i) output[i] = raw.charCodeAt(i);
-  return output;
+    return () => supabase.removeChannel(ch);
+  }, [currentUser, notify]);
 }
