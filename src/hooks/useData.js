@@ -5,12 +5,12 @@ import { celebrate } from '../lib/celebrate';
 import { playSuccess, playMissed, playCheckbox, playNotification } from '../lib/sounds';
 
 // ── Helper: convert VAPID public key from base64url to Uint8Array ────────────
-function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const raw     = atob(base64);
-  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
-}
+// function urlBase64ToUint8Array(base64String) {
+//   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+//   const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+//   const raw     = atob(base64);
+//   return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+// }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ARCHITECTURE: Short polling (primary) + Realtime WebSocket (bonus)
