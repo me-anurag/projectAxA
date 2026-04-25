@@ -61,14 +61,37 @@ export default function App() {
   }, []); // handlePing defined below, stable ref ok
 
   // Ping — tests the full notification pipeline end to end
-  const handlePing = useCallback(() => {
+  // Calls the Edge Function which sends a real server-side push
+  // This is the REAL test: if this works, message/challenge notifications work too
+  const handlePing = useCallback(async () => {
     const theme = USERS[currentUser];
-    const title = `🔔 Ping — ${theme?.displayName || 'Test'}`;
-    const body  = 'Notifications are working! AxA is live.';
-    // Show in-app toast immediately (tests foreground path)
-    showToast({ title, body });
-    // Also fire OS notification (tests background path)
-    sendOSNotification(title, body);
+    // Show in-app toast immediately so user sees something right away
+    showToast({ title: `🔔 Sending ping...`, body: 'Testing notification pipeline...' });
+
+    try {
+      const fnUrl = `${process.env.REACT_APP_SUPABASE_URL}/functions/v1/axa-push`;
+      const res = await fetch(fnUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.REACT_APP_SUPABASE_ANON_KEY}`,
+          'x-webhook-secret': process.env.REACT_APP_WEBHOOK_SECRET || '',
+        },
+        body: JSON.stringify({ type: 'ping', user_id: currentUser }),
+      });
+      const data = await res.json();
+      if (data.ok && data.results?.[0]?.sent) {
+        showToast({ title: `✅ Ping sent!`, body: 'Check your notification — if you see it, everything works.' });
+      } else {
+        showToast({ title: `⚠️ Ping failed`, body: data.results?.[0]?.reason || 'Check Edge Function setup' });
+      }
+    } catch (e) {
+      // Fallback: at least test in-app + OS path
+      const title = `🔔 Ping — ${theme?.displayName || 'Test'}`;
+      const body  = 'Edge Function not reachable. In-app notifications still work.';
+      showToast({ title, body });
+      sendOSNotification(title, body);
+    }
   }, [currentUser, showToast]);
 
   const handleViewChange = useCallback((view) => { playClick(); setActiveView(view); }, []);
