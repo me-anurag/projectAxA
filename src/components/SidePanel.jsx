@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { USERS } from '../lib/theme';
 import { Icon } from './TaskCard';
 import { playClick } from '../lib/sounds';
@@ -13,6 +13,12 @@ export default function SidePanel({
   const theme = USERS[user];
   const [showMusic, setShowMusic] = useState(false);
 
+  // FIX #1: Reset sub-panel whenever the drawer closes — even if closed
+  // externally (parent sets open=false without calling onClose).
+  useEffect(() => {
+    if (!open) setShowMusic(false);
+  }, [open]);
+
   const handleClose = () => {
     setShowMusic(false);
     onClose();
@@ -25,7 +31,8 @@ export default function SidePanel({
         style={{
           ...styles.backdrop,
           opacity: open ? 1 : 0,
-          pointerEvents: open ? 'all' : 'none',
+          // FIX #4: 'all' is not a valid pointer-events value — use 'auto'.
+          pointerEvents: open ? 'auto' : 'none',
         }}
         onClick={() => { playClick(); handleClose(); }}
       />
@@ -86,19 +93,23 @@ export default function SidePanel({
               />
 
               {/* Music — navigates into sub-panel */}
+              {/* FIX #2: Use 'music' icon to distinguish from Sound Effects above.
+                  FIX #3: Wrap chevron in a span with the rotation style instead of
+                  passing style to Icon, which may not forward it. */}
               <button
                 style={{ ...styles.menuItem, color: theme.text }}
                 onClick={() => { playClick(); setShowMusic(true); }}
               >
                 <span style={styles.menuIconWrap}>
-                  <Icon name="volume" size={17} color={theme.textMuted} strokeWidth={1.6} />
+                  <span style={{ fontSize: 15, filter: 'grayscale(1) brightness(2) opacity(0.45)', lineHeight: 1 }}>🎵</span>
                 </span>
                 <span style={styles.menuLabel}>Music</span>
                 {music?.settings?.enabled && (
                   <span style={{ ...styles.badge, background: theme.primary }}>ON</span>
                 )}
-                <Icon name="chevronDown" size={14} color={theme.textMuted} strokeWidth={2}
-                  style={{ transform: 'rotate(-90deg)' }} />
+                <span style={{ display: 'flex', transform: 'rotate(-90deg)' }}>
+                  <Icon name="chevronDown" size={14} color={theme.textMuted} strokeWidth={2} />
+                </span>
               </button>
 
               {/* Daily quotes toggle */}
@@ -170,23 +181,23 @@ function ToggleItem({ icon, label, value, theme, onToggle }) {
 }
 
 const styles = {
-  backdrop:   { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 40, transition: 'opacity 0.22s ease', backdropFilter: 'blur(2px)' },
-  drawer:     { position: 'fixed', top: 0, left: 0, bottom: 0, width: 268, zIndex: 50, transition: 'transform 0.26s cubic-bezier(0.4,0,0.2,1)', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
-  userSection:{ padding: '52px 20px 18px', display: 'flex', alignItems: 'center', gap: 12 },
-  avatar:     { width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  userName:   { fontSize: 16, fontWeight: 700, letterSpacing: '-0.3px', fontFamily: 'Syne, sans-serif' },
-  userSub:    { fontSize: 10, fontFamily: 'Space Mono, monospace', letterSpacing: '0.5px', marginTop: 2 },
-  menu:       { flex: 1, padding: '4px 0', overflowY: 'auto' },
-  menuItem:   { width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '12px 20px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, textAlign: 'left', transition: 'background 0.12s' },
-  menuIconWrap: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, flexShrink: 0 },
-  menuLabel:  { flex: 1, fontFamily: 'DM Sans, sans-serif', fontWeight: 500 },
-  badge:      { fontSize: 9, color: '#fff', padding: '2px 6px', fontFamily: 'Space Mono, monospace', fontWeight: 700, letterSpacing: '0.5px' },
-  toggleItem: { display: 'flex', alignItems: 'center', gap: 14, padding: '12px 20px' },
-  toggleTrack:{ position: 'relative', width: 32, height: 18, border: 'none', cursor: 'pointer', borderRadius: 9, transition: 'background 0.2s', flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 2px' },
-  toggleThumb:{ width: 14, height: 14, borderRadius: '50%', background: '#fff', transition: 'transform 0.2s', display: 'block', flexShrink: 0 },
-  footer:     { padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 4 },
-  miniLogoA:  { color: '#1a6fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 14 },
-  miniLogoX:  { color: 'rgba(255,255,255,0.18)', fontWeight: 300, fontSize: 12 },
-  miniLogoB:  { color: '#ff4d1a', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 14 },
-  footerText: { fontSize: 10, fontFamily: 'Space Mono, monospace', letterSpacing: '0.3px', marginLeft: 4 },
+  backdrop:    { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 40, transition: 'opacity 0.22s ease', backdropFilter: 'blur(2px)' },
+  drawer:      { position: 'fixed', top: 0, left: 0, bottom: 0, width: 268, zIndex: 50, transition: 'transform 0.26s cubic-bezier(0.4,0,0.2,1)', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+  userSection: { padding: '52px 20px 18px', display: 'flex', alignItems: 'center', gap: 12 },
+  avatar:      { width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  userName:    { fontSize: 16, fontWeight: 700, letterSpacing: '-0.3px', fontFamily: 'Syne, sans-serif' },
+  userSub:     { fontSize: 10, fontFamily: 'Space Mono, monospace', letterSpacing: '0.5px', marginTop: 2 },
+  menu:        { flex: 1, padding: '4px 0', overflowY: 'auto' },
+  menuItem:    { width: '100%', display: 'flex', alignItems: 'center', gap: 14, padding: '12px 20px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, textAlign: 'left', transition: 'background 0.12s' },
+  menuIconWrap:{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, flexShrink: 0 },
+  menuLabel:   { flex: 1, fontFamily: 'DM Sans, sans-serif', fontWeight: 500 },
+  badge:       { fontSize: 9, color: '#fff', padding: '2px 6px', fontFamily: 'Space Mono, monospace', fontWeight: 700, letterSpacing: '0.5px' },
+  toggleItem:  { display: 'flex', alignItems: 'center', gap: 14, padding: '12px 20px' },
+  toggleTrack: { position: 'relative', width: 32, height: 18, border: 'none', cursor: 'pointer', borderRadius: 9, transition: 'background 0.2s', flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 2px' },
+  toggleThumb: { width: 14, height: 14, borderRadius: '50%', background: '#fff', transition: 'transform 0.2s', display: 'block', flexShrink: 0 },
+  footer:      { padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 4 },
+  miniLogoA:   { color: '#1a6fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 14 },
+  miniLogoX:   { color: 'rgba(255,255,255,0.18)', fontWeight: 300, fontSize: 12 },
+  miniLogoB:   { color: '#ff4d1a', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 14 },
+  footerText:  { fontSize: 10, fontFamily: 'Space Mono, monospace', letterSpacing: '0.3px', marginLeft: 4 },
 };

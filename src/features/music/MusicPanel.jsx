@@ -24,28 +24,52 @@ export default function MusicPanel({ theme, music, onClose }) {
     e.target.value = '';
   };
 
+  // FIX #8 + #9: No more setTimeout hacks.
+  // toggleEnabled disables/stops internally. On enable we resolve the correct
+  // current song right now and pass it directly to startPlayback.
   const handleToggleEnabled = (val) => {
     playClick();
     toggleEnabled(val);
-    if (val) setTimeout(() => startPlayback(), 100);
+    if (val) {
+      const song = allSongs.find(s => s.id === settings.currentSongId) || allSongs[0];
+      startPlayback(song); // explicit song → no stale-closure risk
+    }
   };
 
   // Per-song play/pause button logic:
-  // - If this song is NOT selected → select it and play
+  // - If this song is NOT selected → select it and play it immediately
   // - If this song IS selected AND is playing → pause
   // - If this song IS selected AND is paused → resume
+  // FIX #7 + #8: selectSong + startPlayback are now called together with the
+  // resolved song object, eliminating the setTimeout race condition.
   const handleSongPlayPause = (songId) => {
     playClick();
     if (!settings.enabled) return;
     const isThisSongSelected = songId === settings.currentSongId;
     if (!isThisSongSelected) {
-      selectSong(songId);
-      setTimeout(() => startPlayback(), 60);
+      const song = allSongs.find(s => s.id === songId);
+      if (!song) return;
+      selectSong(songId);           // update settings / UI highlight
+      startPlayback(song);          // play immediately with the correct song
     } else if (isPlaying) {
       pausePlayback();
     } else {
       resumePlayback();
     }
+  };
+
+  // FIX #10: Commit rename before deleting so onBlur never fires on a
+  // song that no longer exists. Clear renamingId first, then delete.
+  const handleDeleteSong = (songId) => {
+    playClick();
+    if (renamingId === songId) setRenamingId(null);
+    deleteSong(songId);
+  };
+
+  // FIX #10: Rename commit — guard against acting on an already-deleted song.
+  const commitRename = (songId) => {
+    if (renameVal.trim()) renameSong(songId, renameVal.trim());
+    setRenamingId(null);
   };
 
   return (
@@ -113,8 +137,8 @@ export default function MusicPanel({ theme, music, onClose }) {
           <div style={{ ...S.sectionLabel, color: theme.textMuted }}>SONGS</div>
 
           {allSongs.map(song => {
-            const isSelected     = song.id === settings.currentSongId;
-            const isThisPlaying  = isSelected && isPlaying;
+            const isSelected    = song.id === settings.currentSongId;
+            const isThisPlaying = isSelected && isPlaying;
 
             return (
               <div key={song.id} style={{
@@ -165,8 +189,8 @@ export default function MusicPanel({ theme, music, onClose }) {
                     value={renameVal}
                     autoFocus
                     onChange={e => setRenameVal(e.target.value)}
-                    onBlur={() => { if (renameVal.trim()) renameSong(song.id, renameVal.trim()); setRenamingId(null); }}
-                    onKeyDown={e => { if (e.key === 'Enter') { if (renameVal.trim()) renameSong(song.id, renameVal.trim()); setRenamingId(null); } }}
+                    onBlur={() => commitRename(song.id)}
+                    onKeyDown={e => { if (e.key === 'Enter') commitRename(song.id); }}
                   />
                 ) : (
                   <div style={S.songInfo} onClick={() => settings.enabled && handleSongPlayPause(song.id)}>
@@ -185,7 +209,7 @@ export default function MusicPanel({ theme, music, onClose }) {
                     <button style={S.songActionBtn} onClick={() => { setRenamingId(song.id); setRenameVal(song.title); }}>
                       <Icon name="settings" size={13} color={theme.textMuted} />
                     </button>
-                    <button style={S.songActionBtn} onClick={() => { playClick(); deleteSong(song.id); }}>
+                    <button style={S.songActionBtn} onClick={() => handleDeleteSong(song.id)}>
                       <Icon name="trash" size={13} color={theme.textMuted} />
                     </button>
                   </div>
@@ -233,27 +257,27 @@ function TogglePill({ value, onChange, theme }) {
 }
 
 const S = {
-  root:        { display: 'flex', flexDirection: 'column', height: '100%' },
-  header:      { display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px', height: 52, position: 'relative', flexShrink: 0 },
-  accentBar:   { position: 'absolute', top: 0, left: 0, right: 0, height: 2 },
-  backBtn:     { background: 'none', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', transform: 'rotate(90deg)' },
-  headerTitle: { flex: 1, fontSize: 15, fontWeight: 700, fontFamily: 'Syne, sans-serif', letterSpacing: '-0.3px' },
-  nowPlaying:  { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px' },
-  npDot:       { width: 8, height: 8, borderRadius: '50%', flexShrink: 0, transition: 'background 0.3s' },
-  npTitle:     { fontSize: 13, fontWeight: 700, fontFamily: 'Syne, sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  npArtist:    { fontSize: 10, fontFamily: 'Space Mono, monospace', marginTop: 1 },
-  npControl:   { background: 'none', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', flexShrink: 0 },
-  section:     { padding: '12px 14px' },
-  sectionLabel:{ fontSize: 9, fontFamily: 'Space Mono, monospace', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 },
-  modeRow:     { display: 'flex', gap: 8 },
-  modeBtn:     { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, padding: '8px 10px', border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 600, fontFamily: 'Syne, sans-serif', transition: 'all 0.15s' },
-  songRow:     { display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', transition: 'all 0.15s' },
-  playBtn:     { width: 30, height: 30, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all 0.15s', borderRadius: 4 },
-  songInfo:    { flex: 1, minWidth: 0, cursor: 'pointer' },
-  songTitle:   { fontSize: 13, fontWeight: 600, fontFamily: 'DM Sans, sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color 0.15s' },
-  songArtist:  { fontSize: 10, fontFamily: 'Space Mono, monospace', marginTop: 2 },
-  songActions: { display: 'flex', gap: 2, flexShrink: 0 },
+  root:          { display: 'flex', flexDirection: 'column', height: '100%' },
+  header:        { display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px', height: 52, position: 'relative', flexShrink: 0 },
+  accentBar:     { position: 'absolute', top: 0, left: 0, right: 0, height: 2 },
+  backBtn:       { background: 'none', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', transform: 'rotate(90deg)' },
+  headerTitle:   { flex: 1, fontSize: 15, fontWeight: 700, fontFamily: 'Syne, sans-serif', letterSpacing: '-0.3px' },
+  nowPlaying:    { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px' },
+  npDot:         { width: 8, height: 8, borderRadius: '50%', flexShrink: 0, transition: 'background 0.3s' },
+  npTitle:       { fontSize: 13, fontWeight: 700, fontFamily: 'Syne, sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  npArtist:      { fontSize: 10, fontFamily: 'Space Mono, monospace', marginTop: 1 },
+  npControl:     { background: 'none', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', flexShrink: 0 },
+  section:       { padding: '12px 14px' },
+  sectionLabel:  { fontSize: 9, fontFamily: 'Space Mono, monospace', letterSpacing: '1.5px', fontWeight: 700, marginBottom: 8 },
+  modeRow:       { display: 'flex', gap: 8 },
+  modeBtn:       { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, padding: '8px 10px', border: 'none', cursor: 'pointer', fontSize: 11, fontWeight: 600, fontFamily: 'Syne, sans-serif', transition: 'all 0.15s' },
+  songRow:       { display: 'flex', alignItems: 'center', gap: 8, padding: '7px 0', transition: 'all 0.15s' },
+  playBtn:       { width: 30, height: 30, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all 0.15s', borderRadius: 4 },
+  songInfo:      { flex: 1, minWidth: 0, cursor: 'pointer' },
+  songTitle:     { fontSize: 13, fontWeight: 600, fontFamily: 'DM Sans, sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', transition: 'color 0.15s' },
+  songArtist:    { fontSize: 10, fontFamily: 'Space Mono, monospace', marginTop: 2 },
+  songActions:   { display: 'flex', gap: 2, flexShrink: 0 },
   songActionBtn: { background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex', opacity: 0.65 },
-  renameInput: { flex: 1, padding: '5px 8px', fontSize: 13, fontFamily: 'DM Sans, sans-serif', outline: 'none' },
-  addSongBtn:  { display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 0', background: 'none', border: 'none', borderTop: '1px dashed', cursor: 'pointer', marginTop: 8, transition: 'opacity 0.15s' },
+  renameInput:   { flex: 1, padding: '5px 8px', fontSize: 13, fontFamily: 'DM Sans, sans-serif', outline: 'none' },
+  addSongBtn:    { display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 0', background: 'none', border: 'none', borderTop: '1px dashed', cursor: 'pointer', marginTop: 8, transition: 'opacity 0.15s' },
 };
