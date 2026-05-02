@@ -6,7 +6,7 @@ import { Icon } from './TaskCard';
 import AISubtaskScanner from '../features/ai-subtasks/AISubtaskScanner';
 import { useSyllabus } from '../features/syllabus/useSyllabus';
 
-export default function CreateTaskModal({ user, onSubmit, onClose }) {
+export default function CreateTaskModal({ user, onSubmit, onClose, prefillDate }) {
   const theme = USERS[user];
   const { headingOptions, recordMission } = useSyllabus(user);
 
@@ -14,7 +14,14 @@ export default function CreateTaskModal({ user, onSubmit, onClose }) {
   const [selectedTopic,  setSelectedTopic] = useState(''); // heading id, or '' for free-text
   const [showDropdown,   setShowDropdown]  = useState(false);
   const [description,    setDescription]  = useState('');
-  const [deadline,       setDeadline]      = useState('');
+  // Pre-fill deadline to the start of prefillDate if provided
+  const [deadline,       setDeadline]      = useState(() => {
+    if (!prefillDate) return '';
+    // Set to 23:59 of the prefill date so user can still set a specific time
+    const d = new Date(prefillDate);
+    d.setHours(23, 59, 0, 0);
+    return format(d, "yyyy-MM-dd'T'HH:mm");
+  });
   const [subtasks,       setSubtasks]      = useState([]);
   const [newSubtask,     setNewSubtask]    = useState('');
   const [images,         setImages]        = useState([]);
