@@ -36,7 +36,14 @@ export default function Workspace({ ownerUser, viewerUser, challenges = [], onSe
   const tasksByDate = useMemo(() => {
     const map = {};
     tasks.forEach(t => {
-      const k = dk(startOfDay(new Date(t.created_at)));
+      // KEY DECISION: group by deadline date if set, otherwise by creation date.
+      // This means a task created today for tomorrow appears under tomorrow,
+      // making the workspace behave like a proper planner/calendar.
+      // If no deadline → task lives under the day it was created (record of that day's work).
+      const groupDate = t.deadline
+        ? startOfDay(new Date(t.deadline))
+        : startOfDay(new Date(t.created_at));
+      const k = dk(groupDate);
       if (!map[k]) map[k] = [];
       map[k].push(t);
     });
@@ -47,7 +54,8 @@ export default function Workspace({ ownerUser, viewerUser, challenges = [], onSe
   const currentDateObj = toDate(currentDate);
   const isCurrentToday  = currentDate === todayKey();
   const isCurrentPast   = !isCurrentToday && isPast(startOfDay(currentDateObj));
-  const editable        = isOwner && isCurrentToday;
+  // Editable = owner viewing today OR a future date (past dates are always read-only)
+  const editable        = isOwner && !isCurrentPast;
 
   const stats = useMemo(() => ({
     total:  currentTasks.length,
