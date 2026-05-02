@@ -5,12 +5,14 @@ import { format, isToday, isTomorrow, isPast } from 'date-fns';
 import { playClick } from '../lib/sounds';
 
 // ── SVG Icon library ──────────────────────────────────────────────────────────
-export function Icon({ name, size = 16, color = 'currentColor', strokeWidth = 1.7 }) {
+export function Icon({ name, size = 16, color = 'currentColor', strokeWidth = 1.7, style: extraStyle }) {
   const icons = {
     check:      <polyline points="4,12 9,17 20,7" />,
     x:          <><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></>,
     chevronDown:<polyline points="5,8 12,15 19,8" />,
     chevronUp:  <polyline points="5,15 12,8 19,15" />,
+    chevronLeft: <polyline points="15,5 8,12 15,19" />,
+    chevronRight:<polyline points="9,5 16,12 9,19" />,
     trash:      <><polyline points="3,6 21,6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" fill="none"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" fill="none"/></>,
     clock:      <><circle cx="12" cy="12" r="9" fill="none"/><polyline points="12,6 12,12 16,14"/></>,
     send:       <><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22,2 15,22 11,13 2,9" fill={color}/></>,
@@ -46,14 +48,14 @@ export function Icon({ name, size = 16, color = 'currentColor', strokeWidth = 1.
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
       stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round"
-      style={{ display: 'block', flexShrink: 0 }}>
+      style={{ display: 'block', flexShrink: 0, ...extraStyle }}>
       {icons[name] || null}
     </svg>
   );
 }
 
 // ── TaskCard ──────────────────────────────────────────────────────────────────
-export default function TaskCard({ task, viewerUser, ownerUser, onToggleSubtask, onToggleComplete, onDelete }) {
+export default function TaskCard({ task, viewerUser, ownerUser, onToggleSubtask, onToggleComplete, onDelete, readOnly }) {
   const theme    = USERS[ownerUser];
   const subtasks = task.subtasks || [];
   const hasSubtasks = subtasks.length > 0;
@@ -75,7 +77,8 @@ export default function TaskCard({ task, viewerUser, ownerUser, onToggleSubtask,
   const isMissed    = task.status === TASK_STATUS.MISSED;
   const isCompleted = task.status === TASK_STATUS.COMPLETED;
   const isOwner     = viewerUser === ownerUser;
-  const canEdit     = isOwner && !isMissed;
+  // readOnly = true on past dates — no editing, no deleting, just viewing
+  const canEdit     = isOwner && !isMissed && !readOnly;
 
   const deadlineLabel = () => {
     if (!task.deadline) return null;
@@ -165,13 +168,21 @@ export default function TaskCard({ task, viewerUser, ownerUser, onToggleSubtask,
           )}
           {isMissed && <Icon name="alert" size={14} color="#ef4444" />}
 
-          {isOwner && !confirmDelete && (
+          {/* readOnly = past date — show lock, no delete */}
+          {isOwner && readOnly && (
+            <div style={{ display: 'flex', alignItems: 'center', opacity: 0.35 }} title="Past date — cannot edit">
+              <Icon name="lock" size={12} color={theme.textMuted} />
+            </div>
+          )}
+
+          {/* Normal delete — only on editable dates */}
+          {isOwner && !readOnly && !confirmDelete && (
             <button style={S.iconBtn}
               onClick={e => { e.stopPropagation(); setConfirmDelete(true); playClick(); }}>
               <Icon name="trash" size={14} color={theme.textMuted} />
             </button>
           )}
-          {isOwner && confirmDelete && (
+          {isOwner && !readOnly && confirmDelete && (
             <div style={S.confirmRow} onClick={e => e.stopPropagation()}>
               <button style={{ ...S.cfBtn, color: '#ef4444', background: '#ef444418', border: '1px solid #ef444430' }}
                 onClick={handleDelete}>Delete</button>

@@ -203,8 +203,7 @@ export default function Workspace({ ownerUser, viewerUser, challenges = [], onSe
           {/* Date navigator */}
           <div style={{ ...S.dateNav, borderBottom: `1px solid ${theme.border}`, background: theme.surface }}>
             <button style={S.navArrow} onClick={() => goTo('prev')}>
-              <Icon name="chevronDown" size={20} color={theme.textMuted} strokeWidth={2}
-                style={{ transform: 'rotate(90deg)', display: 'block' }} />
+              <Icon name="chevronLeft" size={22} color={theme.textMuted} strokeWidth={2} />
             </button>
             <div style={S.dateNavCenter}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
@@ -227,8 +226,7 @@ export default function Workspace({ ownerUser, viewerUser, challenges = [], onSe
               )}
             </div>
             <button style={S.navArrow} onClick={() => goTo('next')}>
-              <Icon name="chevronDown" size={20} color={theme.textMuted} strokeWidth={2}
-                style={{ transform: 'rotate(-90deg)', display: 'block' }} />
+              <Icon name="chevronRight" size={22} color={theme.textMuted} strokeWidth={2} />
             </button>
           </div>
 
@@ -252,8 +250,9 @@ export default function Workspace({ ownerUser, viewerUser, challenges = [], onSe
                       <div key={task.id} style={{ animation: `taskPop 0.2s ease ${i * 0.04}s both` }}>
                         <TaskCard
                           task={task}
-                          viewerUser={editable ? viewerUser : ownerUser}
+                          viewerUser={viewerUser}
                           ownerUser={ownerUser}
+                          readOnly={isCurrentPast}
                           onToggleSubtask={(sid, done) => editable && toggleSubtask(sid, done, task, theme)}
                           onToggleComplete={() => editable && toggleTaskComplete(task, theme)}
                           onDelete={() => editable && deleteTask(task.id)}
@@ -397,11 +396,11 @@ function CalendarPicker({ theme, tasksByDate, currentKey, onSelect, onClose }) {
     <div style={{ ...S.calBox, background: theme.surface, border: `1px solid ${theme.border}` }}>
       <div style={S.calHead}>
         <button style={S.calNav} onClick={() => setViewMonth(new Date(year, month - 1))}>
-          <Icon name="chevronDown" size={14} color={theme.textMuted} style={{ transform: 'rotate(90deg)' }} />
+          <Icon name="chevronLeft" size={16} color={theme.textMuted} strokeWidth={2} />
         </button>
         <span style={{ ...S.calMonth, color: theme.text }}>{format(viewMonth, 'MMMM yyyy')}</span>
         <button style={S.calNav} onClick={() => setViewMonth(new Date(year, month + 1))}>
-          <Icon name="chevronDown" size={14} color={theme.textMuted} style={{ transform: 'rotate(-90deg)' }} />
+          <Icon name="chevronRight" size={16} color={theme.textMuted} strokeWidth={2} />
         </button>
         <button style={{ ...S.calNav, marginLeft: 8 }} onClick={onClose}>
           <Icon name="x" size={14} color={theme.textMuted} />
