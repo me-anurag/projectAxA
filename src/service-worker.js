@@ -1,4 +1,5 @@
 /* eslint-disable no-restricted-globals */
+/* global clients */
 // ─────────────────────────────────────────────────────────────────────────────
 // AxA Custom Service Worker
 // Place this file at: src/service-worker.js
