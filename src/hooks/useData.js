@@ -5,12 +5,56 @@ import { celebrate } from '../lib/celebrate';
 import { playSuccess, playMissed, playCheckbox, playNotification } from '../lib/sounds';
 
 // ── Helper: convert VAPID public key from base64url to Uint8Array ────────────
-// function urlBase64ToUint8Array(base64String) {
-//   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-//   const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-//   const raw     = atob(base64);
-//   return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
-// }
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw     = atob(base64);
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+// ── Register this device's push subscription with Supabase ───────────────────
+// Called once after notification permission is granted.
+// Saves endpoint + encryption keys to push_subscriptions table so the
+// Edge Function can push to this device even when the app is closed.
+async function registerPushSubscription(userId) {
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (Notification.permission !== 'granted') return;
+
+    const vapidKey = process.env.REACT_APP_VAPID_PUBLIC_KEY;
+    if (!vapidKey) { console.warn('[AxA] REACT_APP_VAPID_PUBLIC_KEY not set'); return; }
+
+    const reg = await navigator.serviceWorker.ready;
+
+    // Get existing subscription or create a new one
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidKey),
+      });
+    }
+
+    const json = sub.toJSON();
+    if (!json.keys?.p256dh || !json.keys?.auth) return;
+
+    // Upsert — if subscription changed (reinstall, new device), update it
+    const { error } = await supabase.from('push_subscriptions').upsert(
+      {
+        user_id:  userId,
+        endpoint: json.endpoint,
+        p256dh:   json.keys.p256dh,
+        auth:     json.keys.auth,
+      },
+      { onConflict: 'user_id' }
+    );
+
+    if (error) console.error('[AxA] Push sub save failed:', error.message);
+    else console.log('[AxA] Push subscription saved for', userId);
+  } catch (e) {
+    console.warn('[AxA] registerPushSubscription failed:', e.message);
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ARCHITECTURE: Short polling (primary) + Realtime WebSocket (bonus)
@@ -443,10 +487,23 @@ export function usePushNotifications(currentUser, onToast) {
   const lastMsgIdRef    = useRef(null);
   const lastChallIdsRef = useRef(new Set());
 
-  // Request permission on mount
+  // Request permission then immediately register the push subscription
+  // This is what saves the device to Supabase so server-side push works
   useEffect(() => {
-    requestNotificationPermission();
-  }, []);
+    if (!currentUser) return;
+    async function setup() {
+      if (!('Notification' in window)) return;
+      let permission = Notification.permission;
+      if (permission === 'default') {
+        permission = await Notification.requestPermission();
+      }
+      if (permission === 'granted') {
+        // Register subscription — saves to push_subscriptions table
+        await registerPushSubscription(currentUser);
+      }
+    }
+    setup();
+  }, [currentUser]);
 
   // The notification trigger function — tries OS notification first,
   // falls back to in-app toast (passed from App.jsx)

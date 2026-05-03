@@ -54,20 +54,18 @@ export default function App() {
   const toggleSound = useCallback((val) => { setSoundOn(val); setSoundEnabled(val); }, []);
   const toggleQuotes = useCallback((val) => { setQuotesOn(val); localStorage.setItem('axa_quotes', String(val)); }, []);
 
+  const handlePingRef = useRef(null);
+
   const handleMenuItem = useCallback((id) => {
     if (id === 'logout')   { localStorage.removeItem('axa_user'); setCurrentUser(null); }
     if (id === 'syllabus') { setSyllabusOpen(true); }
-    if (id === 'ping')     { handlePing(); }
-  }, []); // handlePing defined below, stable ref ok
+    if (id === 'ping')     { handlePingRef.current?.(); } // use ref — avoids stale closure
+  }, []);
 
   // Ping — tests the full notification pipeline end to end
-  // Calls the Edge Function which sends a real server-side push
-  // This is the REAL test: if this works, message/challenge notifications work too
   const handlePing = useCallback(async () => {
     const theme = USERS[currentUser];
-    // Show in-app toast immediately so user sees something right away
     showToast({ title: `🔔 Sending ping...`, body: 'Testing notification pipeline...' });
-
     try {
       const fnUrl = `${process.env.REACT_APP_SUPABASE_URL}/functions/v1/axa-push`;
       const res = await fetch(fnUrl, {
@@ -81,18 +79,20 @@ export default function App() {
       });
       const data = await res.json();
       if (data.ok && data.results?.[0]?.sent) {
-        showToast({ title: `✅ Ping sent!`, body: 'Check your notification — if you see it, everything works.' });
+        showToast({ title: `✅ Ping sent!`, body: 'Lock your screen — OS notification should appear.' });
       } else {
-        showToast({ title: `⚠️ Ping failed`, body: data.results?.[0]?.reason || 'Check Edge Function setup' });
+        const reason = data.results?.[0]?.reason || 'Check Edge Function logs in Supabase';
+        showToast({ title: `⚠️ Ping failed`, body: reason });
       }
     } catch (e) {
-      // Fallback: at least test in-app + OS path
       const title = `🔔 Ping — ${theme?.displayName || 'Test'}`;
-      const body  = 'Edge Function not reachable. In-app notifications still work.';
-      showToast({ title, body });
-      sendOSNotification(title, body);
+      showToast({ title, body: 'Edge Function unreachable. Check deployment.' });
+      sendOSNotification(title, 'In-app path works. Server push not reachable.');
     }
   }, [currentUser, showToast]);
+
+  // Keep ref current so handleMenuItem can always call the latest handlePing
+  handlePingRef.current = handlePing;
 
   const handleViewChange = useCallback((view) => { playClick(); setActiveView(view); }, []);
 
