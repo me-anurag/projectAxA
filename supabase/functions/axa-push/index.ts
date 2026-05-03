@@ -56,26 +56,24 @@ async function buildVapidJwt(audience: string): Promise<string> {
 
   const sigInput = new TextEncoder().encode(`${header}.${payload}`);
 
-  // Import the VAPID private key (raw EC P-256 private key, base64url encoded)
-  const privateKeyBytes = base64urlDecode(VAPID_PRIVATE_KEY);
+  // Import using JWK format — avoids PKCS8 DER encoding issues across runtimes.
+  // We derive x and y from the uncompressed public key (0x04 || x || y).
+  const pubBytes = base64urlDecode(VAPID_PUBLIC_KEY);
+  // pubBytes[0] === 0x04 (uncompressed point marker), then 32 bytes x, 32 bytes y
+  const x = base64urlEncode(pubBytes.slice(1, 33).buffer);
+  const y = base64urlEncode(pubBytes.slice(33, 65).buffer);
 
-  // The VAPID private key is a raw 32-byte EC private key.
-  // We need to wrap it in PKCS8 format for WebCrypto importKey.
-  // EC P-256 PKCS8 prefix (ASN.1 DER encoding for version + algorithm OID)
-  const pkcs8Prefix = new Uint8Array([
-    0x30, 0x41, 0x02, 0x01, 0x00, 0x30, 0x13, 0x06,
-    0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,
-    0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03,
-    0x01, 0x07, 0x04, 0x27, 0x30, 0x25, 0x02, 0x01,
-    0x01, 0x04, 0x20,
-  ]);
-  const pkcs8Key = new Uint8Array(pkcs8Prefix.length + privateKeyBytes.length);
-  pkcs8Key.set(pkcs8Prefix);
-  pkcs8Key.set(privateKeyBytes, pkcs8Prefix.length);
+  const jwk = {
+    kty: 'EC',
+    crv: 'P-256',
+    d: VAPID_PRIVATE_KEY, // already base64url
+    x,
+    y,
+  };
 
   const cryptoKey = await crypto.subtle.importKey(
-    'pkcs8',
-    pkcs8Key,
+    'jwk',
+    jwk,
     { name: 'ECDSA', namedCurve: 'P-256' },
     false,
     ['sign']
@@ -131,8 +129,6 @@ async function sendPushToUser(
   });
 
   // ── Encrypt payload using Web Push encryption (RFC 8291) ──────────────────
-  // We need to encrypt the payload with the subscription's p256dh key.
-  // This is the content encryption step required by Web Push spec.
   let encryptedBody: Uint8Array;
   try {
     encryptedBody = await encryptPayload(payload, p256dh, auth);
