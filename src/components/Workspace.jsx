@@ -482,16 +482,20 @@ function CompletionRing({ total, done, missed, theme }) {
           alignItems: 'center', justifyContent: 'center',
         }}>
           {allDone ? (
-            <span style={{ fontSize: 16 }}>✓</span>
+            // Colorful green check — use SVG so color is reliable cross-platform
+            <svg width={20} height={20} viewBox="0 0 24 24" fill="none"
+              stroke={doneColor} strokeWidth={2.8} strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="5,12 10,17 19,7" />
+            </svg>
           ) : (
-            <>
-              <span style={{ fontSize: 13, fontWeight: 800, fontFamily: 'Syne, sans-serif', color: theme.text, lineHeight: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
+              <span style={{ fontSize: 15, fontWeight: 800, fontFamily: 'Syne, sans-serif', color: theme.text, lineHeight: 1 }}>
                 {done}
               </span>
-              <span style={{ fontSize: 8, fontFamily: 'Space Mono, monospace', color: theme.textMuted, lineHeight: 1, marginTop: 1 }}>
+              <span style={{ fontSize: 10, fontFamily: 'Syne, sans-serif', fontWeight: 600, color: theme.textMuted, lineHeight: 1 }}>
                 /{total}
               </span>
-            </>
+            </div>
           )}
         </div>
       </div>
