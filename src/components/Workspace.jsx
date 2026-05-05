@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useCallback } from 'react';
 import { USERS } from '../lib/theme';
 import { useTasks } from '../hooks/useData';
+import { useStreak } from '../hooks/useStreak';
 import TaskCard, { Icon } from './TaskCard';
 import CreateTaskModal from './CreateTaskModal';
 import ChallengeCard from './ChallengeCard';
@@ -32,6 +33,7 @@ export default function Workspace({ ownerUser, viewerUser, challenges = [], onSe
   const quickInputRef = useRef(null);
 
   const { tasks, loading, createTask, toggleSubtask, toggleTaskComplete, deleteTask } = useTasks(ownerUser);
+  const { streak, score } = useStreak(tasks);
 
   const tasksByDate = useMemo(() => {
     const map = {};
@@ -138,23 +140,58 @@ export default function Workspace({ ownerUser, viewerUser, challenges = [], onSe
             {theme.displayName}'s Missions
           </div>
         </div>
-        <div style={S.headerActions}>
-          {mainView === 'tasks' && (
-            <>
-              {isOwner && (
-                <button style={{ ...S.iconBtn, borderColor: theme.border }}
-                  onClick={() => { playClick(); setShowChallenge(v => !v); }}
-                >
-                  <Icon name="sword" size={15} color={showChallenge ? theme.primary : theme.textMuted} />
-                </button>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* Streak + score badges — shown on owner's workspace */}
+          {isOwner && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {streak > 0 && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  padding: '4px 8px',
+                  background: `${theme.primary}18`,
+                  border: `1px solid ${theme.primary}35`,
+                }}>
+                  <span style={{ fontSize: 13 }}>🔥</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, fontFamily: 'Space Mono, monospace', color: theme.primary }}>
+                    {streak}d
+                  </span>
+                </div>
               )}
-              <button style={{ ...S.iconBtn, borderColor: theme.border }}
-                onClick={() => { playClick(); setShowCalendar(v => !v); }}
-              >
-                <Icon name="calendar" size={15} color={showCalendar ? theme.primary : theme.textMuted} />
-              </button>
-            </>
+              {score > 0 && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  padding: '4px 8px',
+                  background: 'rgba(255,255,255,0.05)',
+                  border: `1px solid rgba(255,255,255,0.1)`,
+                }}>
+                  <span style={{ fontSize: 10 }}>⚡</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, fontFamily: 'Space Mono, monospace', color: theme.textMuted }}>
+                    {score}
+                  </span>
+                </div>
+              )}
+            </div>
           )}
+
+          <div style={S.headerActions}>
+            {mainView === 'tasks' && (
+              <>
+                {isOwner && (
+                  <button style={{ ...S.iconBtn, borderColor: theme.border }}
+                    onClick={() => { playClick(); setShowChallenge(v => !v); }}
+                  >
+                    <Icon name="sword" size={15} color={showChallenge ? theme.primary : theme.textMuted} />
+                  </button>
+                )}
+                <button style={{ ...S.iconBtn, borderColor: theme.border }}
+                  onClick={() => { playClick(); setShowCalendar(v => !v); }}
+                >
+                  <Icon name="calendar" size={15} color={showCalendar ? theme.primary : theme.textMuted} />
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -224,12 +261,15 @@ export default function Workspace({ ownerUser, viewerUser, challenges = [], onSe
               <div style={{ ...S.dateNavSub, color: theme.textMuted }}>
                 {format(currentDateObj, 'EEEE · MMMM d, yyyy')}
               </div>
+              {/* Completion ring — replaces plain stat chips */}
               {stats.total > 0 && (
-                <div style={S.statsRow}>
-                  <span style={{ ...S.statChip, color: theme.textMuted, background: 'rgba(255,255,255,0.06)' }}>{stats.total}</span>
-                  {stats.done   > 0 && <span style={{ ...S.statChip, color: '#22c55e', background: '#22c55e18' }}>✓ {stats.done}</span>}
-                  {stats.missed > 0 && <span style={{ ...S.statChip, color: '#ef4444', background: '#ef444418' }}>✗ {stats.missed}</span>}
-                  {stats.active > 0 && <span style={{ ...S.statChip, color: theme.primary, background: `${theme.primary}18` }}>· {stats.active}</span>}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 6 }}>
+                  <CompletionRing
+                    total={stats.total}
+                    done={stats.done}
+                    missed={stats.missed}
+                    theme={theme}
+                  />
                 </div>
               )}
             </div>
@@ -370,6 +410,119 @@ export default function Workspace({ ownerUser, viewerUser, challenges = [], onSe
           prefillDate={currentDateObj}
         />
       )}
+    </div>
+  );
+}
+
+// ── Completion Ring ────────────────────────────────────────────────────────────
+// SVG circular progress ring showing done/missed/active breakdown.
+// Fills clockwise as tasks complete. Turns fully green when all done.
+function CompletionRing({ total, done, missed, theme }) {
+  const size   = 52;
+  const stroke = 4;
+  const r      = (size - stroke) / 2;
+  const circ   = 2 * Math.PI * r;
+  const allDone = done === total && total > 0;
+
+  // Arc lengths
+  const donePct   = total > 0 ? done   / total : 0;
+  const missedPct = total > 0 ? missed / total : 0;
+
+  const doneArc   = donePct   * circ;
+  const missedArc = missedPct * circ;
+
+  // Colors
+  const doneColor   = '#22c55e';
+  const missedColor = '#ef4444';
+  const bgColor     = 'rgba(255,255,255,0.07)';
+  const ringColor   = allDone ? doneColor : theme.primary;
+
+  // The done arc starts at top (−90deg rotation applied to SVG)
+  // Missed arc starts right after done arc
+  const missedOffset = circ - doneArc; // dashoffset for missed segment
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      {/* Ring */}
+      <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+        <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
+          {/* Background track */}
+          <circle cx={size/2} cy={size/2} r={r}
+            fill="none" stroke={bgColor} strokeWidth={stroke} />
+          {/* Done arc */}
+          {doneArc > 0 && (
+            <circle cx={size/2} cy={size/2} r={r}
+              fill="none"
+              stroke={allDone ? doneColor : ringColor}
+              strokeWidth={stroke}
+              strokeDasharray={`${doneArc} ${circ - doneArc}`}
+              strokeDashoffset={0}
+              strokeLinecap="round"
+              style={{ transition: 'stroke-dasharray 0.4s cubic-bezier(0.34,1.56,0.64,1)' }}
+            />
+          )}
+          {/* Missed arc — drawn after done, in red */}
+          {missedArc > 0 && (
+            <circle cx={size/2} cy={size/2} r={r}
+              fill="none"
+              stroke={missedColor}
+              strokeWidth={stroke}
+              strokeDasharray={`${missedArc} ${circ - missedArc}`}
+              strokeDashoffset={missedOffset}
+              strokeLinecap="round"
+              style={{ transition: 'stroke-dasharray 0.4s cubic-bezier(0.34,1.56,0.64,1)' }}
+            />
+          )}
+        </svg>
+
+        {/* Centre text */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+        }}>
+          {allDone ? (
+            <span style={{ fontSize: 16 }}>✓</span>
+          ) : (
+            <>
+              <span style={{ fontSize: 13, fontWeight: 800, fontFamily: 'Syne, sans-serif', color: theme.text, lineHeight: 1 }}>
+                {done}
+              </span>
+              <span style={{ fontSize: 8, fontFamily: 'Space Mono, monospace', color: theme.textMuted, lineHeight: 1, marginTop: 1 }}>
+                /{total}
+              </span>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Legend */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {done > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: doneColor }} />
+            <span style={{ fontSize: 10, fontFamily: 'Space Mono, monospace', color: doneColor }}>
+              {done} done
+            </span>
+          </div>
+        )}
+        {missed > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: missedColor }} />
+            <span style={{ fontSize: 10, fontFamily: 'Space Mono, monospace', color: missedColor }}>
+              {missed} missed
+            </span>
+          </div>
+        )}
+        {(total - done - missed) > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: theme.primary }} />
+            <span style={{ fontSize: 10, fontFamily: 'Space Mono, monospace', color: theme.textMuted }}>
+              {total - done - missed} active
+            </span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -521,8 +674,6 @@ const S = {
   dateNavLabel:   { fontSize: 17, fontWeight: 700, fontFamily: 'Syne, sans-serif', letterSpacing: '-0.3px' },
   dateNavSub:     { fontSize: 10, fontFamily: 'Space Mono, monospace', marginTop: 2 },
   todayPulse:     { width: 6, height: 6, borderRadius: '50%', flexShrink: 0 },
-  statsRow:       { display: 'flex', gap: 5, justifyContent: 'center', marginTop: 5, flexWrap: 'wrap' },
-  statChip:       { fontSize: 10, fontFamily: 'Space Mono, monospace', fontWeight: 700, padding: '2px 7px' },
   taskPane:       { flex: 1, overflowY: 'auto' },
   // Quick-add bar
   quickBar:       { flexShrink: 0, padding: '8px 10px' },
